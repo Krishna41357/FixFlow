@@ -1,256 +1,283 @@
-# routes/chats.py
-from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status, Depends, Query
-from pydantic import BaseModel, Field
+"""
+Chat Routes
+Manages chat sessions and conversational queries.
+"""
 
-from controllers.auth import get_current_user
-from controllers.chat import (
-    create_chat,
-    get_user_chats,
-    get_chat_by_id,
-    add_message_to_chat,
-    update_chat_title,
-    delete_chat,
-    generate_chat_title
+from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List
+
+from models.chat import (
+    ChatQueryRequest, ChatQueryResponse, ChatSessionResponse,
+    ChatSessionListItem
 )
-from models.chat import ChatResponse, ChatListResponse, Message
-from answer_generator import answer_query
+from controllers import chat_controller, investigation_controller
+from routes.auth import get_current_user
+from models.users import TokenData
 
-router = APIRouter(prefix="/chats", tags=["chats"])
-
-
-# Request models
-class ChatCreate(BaseModel):
-    """Schema for creating a new chat"""
-    title: Optional[str] = Field(None, max_length=200)
+router = APIRouter(prefix="/chats", tags=["chat"])
 
 
-class MessageCreate(BaseModel):
-    """Schema for creating a new message"""
-    content: str = Field(..., min_length=1)
-
-
-class ChatUpdate(BaseModel):
-    """Schema for updating a chat"""
-    title: str = Field(..., min_length=1, max_length=200)
-
-
-@router.post("", status_code=status.HTTP_201_CREATED)
-async def create_new_chat(
-    chat: ChatCreate,
-    current_user=Depends(get_current_user)
-):
+@router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def create_session(
+    title: str = "New Session",
+    current_user: TokenData = Depends(get_current_user)
+) -> dict:
     """
-    Create a new chat conversation.
+    Create a new chat session.
     
-    Request body:
+    **Query Parameters:**
+    - `title`: Session title (optional, default: "New Session")
+    
+    **Response:**
+    ```json
     {
-        "title": "My Chat" (optional)
+        "session_id": "507f1f77bcf86cd799439011",
+        "user_id": "507f1f77bcf86cd799439010",
+        "title": "New Session",
+        "created_at": "2024-01-15T10:30:00Z"
     }
-    
-    Response:
-    {
-        "chat_id": "..."
-    }
+    ```
     """
-    # Validate user_id exists in token
-    if not current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: user_id not found. Please log in again."
-        )
-    
-    try:
-        title = chat.title or "New Chat"
-        user_id = str(current_user.user_id)  # Ensure it's a string
-        
-        print(f"DEBUG create_new_chat: user_id={user_id}, title={title}")
-        
-        chat_id = create_chat(
-            user_id=user_id,
-            title=title
-        )
-        
-        return {
-            "chat_id": chat_id,
-            "title": title,
-            "message": "Chat created successfully"
-        }
-    except Exception as e:
-        print(f"ERROR create_new_chat: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating chat: {str(e)}"
-        )
-
-
-@router.get("", response_model=List[ChatListResponse])
-async def list_chats(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    current_user=Depends(get_current_user)
-):
-    """
-    Get all chats for the current user.
-    
-    Query params:
-    - skip: Number of chats to skip (default: 0)
-    - limit: Maximum number of chats to return (default: 50, max: 100)
-    """
-    # Validate user_id exists in token
-    if not current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: user_id not found. Please log in again."
-        )
-    
-    try:
-        user_id = str(current_user.user_id)  # Ensure it's a string
-        
-        print(f"DEBUG list_chats: user_id={user_id}, skip={skip}, limit={limit}")
-        
-        chats = get_user_chats(
-            user_id=user_id,
-            skip=skip,
-            limit=limit
-        )
-        return chats
-    except Exception as e:
-        print(f"ERROR list_chats: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching chats: {str(e)}"
-        )
-
-
-@router.get("/{chat_id}", response_model=ChatResponse)
-async def get_chat(
-    chat_id: str,
-    current_user=Depends(get_current_user)
-):
-    """
-    Get a specific chat with all messages.
-    """
-    # Validate user_id exists in token
-    if not current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: user_id not found. Please log in again."
-        )
-    
-    user_id = str(current_user.user_id)  # Ensure it's a string
-    
-    print(f"DEBUG get_chat route: chat_id={chat_id}, user_id={user_id}")
-    
-    chat = get_chat_by_id(chat_id=chat_id, user_id=user_id)
-    
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat not found or you don't have access to it"
-        )
-    
-    return chat
-
-
-@router.post("/{chat_id}/messages")
-async def add_message(
-    chat_id: str,
-    message: MessageCreate,
-    current_user=Depends(get_current_user)
-):
-    """
-    Add a message to a chat and get AI response.
-    
-    Request body:
-    {
-        "content": "Your question here"
-    }
-    
-    Response:
-    {
-        "user_message": {...},
-        "assistant_message": {...}
-    }
-    """
-    # Validate user_id exists in token
-    if not current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: user_id not found. Please log in again."
-        )
-    
-    user_id = str(current_user.user_id)  # Ensure it's a string
-    
-    print(f"DEBUG add_message: chat_id={chat_id}, user_id={user_id}")
-    
-    # Verify chat exists and belongs to user
-    chat = get_chat_by_id(chat_id=chat_id, user_id=user_id)
-    if not chat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat not found or you don't have access to it"
-        )
-    
-    # Add user message
-    user_message_added = add_message_to_chat(
-        chat_id=chat_id,
-        user_id=user_id,
-        role="user",
-        content=message.content
+    session_id = chat_controller.create_session(
+        user_id=current_user.user_id,
+        title=title
     )
     
-    if not user_message_added:
+    if not session_id:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to add user message"
-        )
-    
-    # If this is the first message, auto-generate title
-    if chat.message_count == 0:
-        title = generate_chat_title(message.content)
-        update_chat_title(
-            chat_id=chat_id,
-            user_id=user_id,
-            title=title
-        )
-    
-    # Get AI response using RAG
-    try:
-        answer, sources = answer_query(message.content)
-    except Exception as e:
-        print(f"ERROR generating answer: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating answer: {str(e)}"
-        )
-    
-    # Add assistant message with sources
-    assistant_message_added = add_message_to_chat(
-        chat_id=chat_id,
-        user_id=user_id,
-        role="assistant",
-        content=answer,
-        sources=sources
-    )
-    
-    if not assistant_message_added:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to add assistant message"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to create session"
         )
     
     return {
-        "user_message": {
-            "role": "user",
-            "content": message.content
-        },
-        "assistant_message": {
-            "role": "assistant",
-            "content": answer,
-            "sources": sources
-        }
+        "session_id": session_id,
+        "user_id": current_user.user_id,
+        "title": title,
+        "message_count": 0
     }
+
+
+@router.get("", response_model=List[ChatSessionListItem])
+async def list_sessions(
+    current_user: TokenData = Depends(get_current_user),
+    limit: int = 20,
+    skip: int = 0
+) -> List[ChatSessionListItem]:
+    """
+    List chat sessions for current user.
+    Lightweight version for sidebar display.
+    
+    **Query Parameters:**
+    - `limit`: Max results (default: 20, max: 100)
+    - `skip`: Pagination offset (default: 0)
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": "507f1f77bcf86cd799439011",
+            "title": "Orders schema issue",
+            "message_count": 5,
+            "last_message": "What changed in the orders table?",
+            "created_at": "2024-01-15T10:30:00Z",
+            "updated_at": "2024-01-15T10:35:00Z"
+        }
+    ]
+    ```
+    """
+    if limit > 100:
+        limit = 100
+    
+    return chat_controller.list_sessions(
+        user_id=current_user.user_id,
+        limit=limit,
+        skip=skip
+    )
+
+
+@router.get("/{session_id}", response_model=ChatSessionResponse)
+async def get_session(
+    session_id: str,
+    current_user: TokenData = Depends(get_current_user)
+) -> ChatSessionResponse:
+    """
+    Get full chat session with message history.
+    
+    **Path Parameters:**
+    - `session_id`: Session ID
+    
+    **Response:**
+    ```json
+    {
+        "id": "507f1f77bcf86cd799439011",
+        "user_id": "507f1f77bcf86cd799439010",
+        "title": "Orders schema issue",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Why is my orders table failing?",
+                "timestamp": "2024-01-15T10:30:00Z"
+            },
+            {
+                "role": "assistant",
+                "content": "Starting investigation...",
+                "timestamp": "2024-01-15T10:30:05Z"
+            }
+        ],
+        "investigation_id": "507f1f77bcf86cd799439012",
+        "message_count": 2
+    }
+    ```
+    """
+    session = chat_controller.get_session(
+        session_id=session_id,
+        user_id=current_user.user_id
+    )
+    
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+    
+    return session
+
+
+@router.post("/{session_id}/query", response_model=ChatQueryResponse)
+async def send_query(
+    session_id: str,
+    query: ChatQueryRequest,
+    current_user: TokenData = Depends(get_current_user)
+) -> ChatQueryResponse:
+    """
+    Send a message in a chat session.
+    
+    **Path Parameters:**
+    - `session_id`: Session ID
+    
+    **Request Body:**
+    ```json
+    {
+        "message": "Why is my orders table failing?"
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "session_id": "507f1f77bcf86cd799439011",
+        "message": "Based on the lineage analysis, the orders table is failing because...",
+        "is_followup": false,
+        "investigation_id": "507f1f77bcf86cd799439012"
+    }
+    ```
+    
+    **Behavior:**
+    - If message is related to existing investigation: answers immediately
+    - If message asks about new asset: triggers new investigation
+    - All messages are appended to session history
+    """
+    # Verify session exists
+    session = chat_controller.get_session(
+        session_id=session_id,
+        user_id=current_user.user_id
+    )
+    
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+    
+    # Get investigation if exists
+    investigation_result = None
+    if session.investigation_id:
+        investigation = investigation_controller.get_investigation(
+            investigation_id=session.investigation_id,
+            user_id=current_user.user_id
+        )
+        if investigation and investigation.root_cause:
+            investigation_result = investigation.root_cause.dict()
+    
+    # Handle query
+    response = chat_controller.handle_query(
+        session_id=session_id,
+        user_id=current_user.user_id,
+        query=query,
+        investigation_result=investigation_result
+    )
+    
+    if not response:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to process query"
+        )
+    
+    return response
+
+
+@router.put("/{session_id}/title", response_model=dict)
+async def update_session_title(
+    session_id: str,
+    title: str,
+    current_user: TokenData = Depends(get_current_user)
+) -> dict:
+    """
+    Update session title.
+    
+    **Path Parameters:**
+    - `session_id`: Session ID
+    
+    **Query Parameters:**
+    - `title`: New title
+    
+    **Response:**
+    ```json
+    {
+        "session_id": "507f1f77bcf86cd799439011",
+        "title": "Orders schema issue"
+    }
+    ```
+    """
+    success = chat_controller.update_session_title(
+        session_id=session_id,
+        user_id=current_user.user_id,
+        title=title
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+    
+    return {
+        "session_id": session_id,
+        "title": title
+    }
+
+
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: str,
+    current_user: TokenData = Depends(get_current_user)
+) -> None:
+    """
+    Delete a chat session.
+    
+    **Path Parameters:**
+    - `session_id`: Session ID
+    """
+    success = chat_controller.delete_session(
+        session_id=session_id,
+        user_id=current_user.user_id
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
 
 
 @router.patch("/{chat_id}")

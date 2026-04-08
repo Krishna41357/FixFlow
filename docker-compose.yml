@@ -1,0 +1,125 @@
+version: '3.9'
+
+services:
+  # ===== MONGODB DATABASE =====
+  mongodb:
+    image: mongo:7.0-alpine
+    container_name: pipeline_autopsy_db
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpassword
+      MONGO_INITDB_DATABASE: pipeline_autopsy_db
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pipeline_autopsy_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===== BACKEND API =====
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: pipeline_autopsy_api
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      # Database
+      MONGO_URI: mongodb://root:rootpassword@mongodb:27017/pipeline_autopsy_db?authSource=admin
+      
+      # Authentication
+      SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-this-in-production-12345678}
+      
+      # OpenMetadata
+      OPENMETADATA_URL: ${OPENMETADATA_URL:-http://localhost:8585}
+      OPENMETADATA_API_KEY: ${OPENMETADATA_API_KEY:-eyJrIjoiM...}
+      
+      # LLM Providers
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-demo-key-1234567890abcdef}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-sk-ant-demo-key-1234567890abcdef}
+      GROQ_API_KEY: ${GROQ_API_KEY:-gsk_demo_key_1234567890abcdef}
+      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-claude}
+      
+      # GitHub
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-123456}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-demo-secret}
+      
+      # API
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000", "http://localhost:8000"]}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DEBUG: ${DEBUG:-false}
+    
+    volumes:
+      - ./server:/app
+    networks:
+      - pipeline_autopsy_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===== FRONTEND =====
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pipeline_autopsy_ui
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: 1
+    
+    networks:
+      - pipeline_autopsy_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  pipeline_autopsy_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local

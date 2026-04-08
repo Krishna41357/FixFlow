@@ -507,7 +507,7 @@ export default function Chatbot() {
                   <User className="w-6 h-6 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{user.username}</p>
+                  <p className="text-sm font-semibold text-white truncate">{user.full_name || user.email}</p>
                   <p className="text-xs text-gray-400 truncate">{user.email}</p>
                 </div>
               </div>
@@ -726,7 +726,7 @@ export default function Chatbot() {
             </div>
             <p className="text-xs text-gray-500 text-center mt-2">
               {user 
-                ? `Logged in as ${user.username} • Chat history is saved` 
+                ? `Logged in as ${user.full_name || user.email} • Chat history is saved` 
                 : 'Not logged in • Messages are not saved'}
             </p>
           </div>

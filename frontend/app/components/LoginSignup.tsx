@@ -79,8 +79,7 @@ export default function LoginSignup() {
       } else {
         await register(
           email, 
-          username, 
-          password, 
+          password,
           fullName.trim() || undefined
         );
         setSuccessMessage('Account created! Logging you in...');
@@ -153,17 +152,24 @@ export default function LoginSignup() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 bg-gradient-to-br from-red-500 to-red-700 shadow-lg transform transition-transform hover:scale-110`}>
-            <UserPlus className="w-8 h-8 text-white" />
+            <span className="text-2xl font-bold text-white">PA</span>
           </div>
           <h1 className={`text-4xl font-bold mb-2 ${
             darkMode ? 'text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-orange-400' : 'text-transparent bg-clip-text bg-gradient-to-r from-red-600 to-red-700'
           }`}>
-            {isLogin ? 'Welcome Back' : 'Create Account'}
+            Pipeline Autopsy
           </h1>
-          <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+          <p className={`text-sm mb-3 ${
+            darkMode ? 'text-gray-300' : 'text-gray-600'
+          }`}>
             {isLogin 
-              ? 'Sign in to access your RAG chatbot' 
-              : 'Sign up to start using RAG chatbot'}
+              ? 'Investigate data pipeline failures with AI-powered root cause analysis' 
+              : 'Create an account to begin investigating pipeline issues'}
+          </p>
+          <p className={`text-xs ${
+            darkMode ? 'text-gray-400' : 'text-gray-500'
+          }`}>
+            {isLogin ? 'powered by AI & LLM' : 'powered by OpenMetadata & AI'}
           </p>
         </div>
 
@@ -232,45 +238,6 @@ export default function LoginSignup() {
               )}
             </div>
 
-            {/* Username Field (Sign Up Only) */}
-            {!isLogin && (
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${
-                  darkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>
-                  Username <span className="text-red-500">*</span>
-                </label>
-                <div className="relative group">
-                  <User className={`absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 transition-colors ${
-                    darkMode ? 'text-gray-400 group-focus-within:text-red-400' : 'text-gray-400 group-focus-within:text-red-500'
-                  }`} />
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => handleFieldChange('username', e.target.value)}
-                    placeholder="johndoe"
-                    required
-                    disabled={isLoading}
-                    className={`w-full pl-12 pr-4 py-3 rounded-xl border-2 transition-all focus:outline-none focus:scale-105 disabled:opacity-50 disabled:cursor-not-allowed ${
-                      fieldErrors.username 
-                        ? 'border-red-500' 
-                        : darkMode
-                        ? 'bg-slate-700/50 border-slate-600 focus:border-red-500 text-white placeholder-gray-400'
-                        : 'bg-white border-gray-300 focus:border-red-500 text-black placeholder-gray-400'
-                    }`}
-                  />
-                </div>
-                {fieldErrors.username && (
-                  <p className={`mt-1 text-sm ${darkMode ? 'text-red-400' : 'text-red-600'}`}>
-                    {fieldErrors.username}
-                  </p>
-                )}
-                <p className={`mt-1 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                  3-50 characters, letters, numbers, underscores, and hyphens only
-                </p>
-              </div>
-            )}
-
             {/* Full Name Field (Sign Up Only) */}
             {!isLogin && (
               <div>
@@ -296,6 +263,15 @@ export default function LoginSignup() {
                     }`}
                   />
                 </div>
+              </div>
+            )}
+
+            {/* OpenMetadata Integration Info (Sign Up Only) */}
+            {!isLogin && (
+              <div className={`p-3 rounded-lg border ${darkMode ? 'bg-blue-900/20 border-blue-700/30' : 'bg-blue-50 border-blue-200'}`}>
+                <p className={`text-xs ${darkMode ? 'text-blue-300' : 'text-blue-800'}`}>
+                  💡 After signup, you'll be able to connect your OpenMetadata catalog and GitHub repositories to start investigating pipeline issues.
+                </p>
               </div>
             )}
 
@@ -362,13 +338,13 @@ export default function LoginSignup() {
           {/* Toggle Mode */}
           <div className="mt-6 text-center">
             <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-              {isLogin ? "Don't have an account? " : 'Already have an account? '}
+              {isLogin ? 'New to Pipeline Autopsy? ' : 'Already using Pipeline Autopsy? '}
               <button
                 onClick={toggleMode}
                 disabled={isLoading}
                 className="bg-gradient-to-r from-red-500 to-red-700 bg-clip-text text-transparent hover:from-red-600 hover:to-red-800 font-bold transition-all duration-300 disabled:opacity-50"
               >
-                {isLogin ? 'Sign up' : 'Sign in'}
+                {isLogin ? 'Create account' : 'Sign in'}
               </button>
             </p>
           </div>
@@ -376,7 +352,7 @@ export default function LoginSignup() {
 
         {/* Footer */}
         <p className={`text-center text-xs mt-6 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-          By continuing, you agree to our Terms of Service and Privacy Policy
+          🔍 AI-powered pipeline debugging for data professionals
         </p>
       </div>
     </div>

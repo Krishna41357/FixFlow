@@ -1,134 +1,242 @@
+"""
+KS-RAG API - Knowledge Source Root Cause Analysis Generator
+
+Main FastAPI application that wires together:
+- Authentication & user management
+- OpenMetadata connections
+- Event intake (dbt, GitHub, manual)
+- Investigation pipeline
+- Chat sessions
+- GitHub PR integration
+"""
+
 import os
-from typing import List
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
-from vectorstore import index_documents
-from answer_generator import answer_query
-from controllers.auth import get_current_user
-from routes.users import router as users_router
-from routes.chats import router as chat_router
-
+# Load environment
 load_dotenv()
 
+# Initialize FastAPI app
 app = FastAPI(
-    title="RAG Chatbot API",
-    description="Upload PDFs and query them using RAG (Retrieval-Augmented Generation) with chat history",
-    version="2.0.0"
+    title="KS-RAG: Root Cause Analysis Generator",
+    description="Intelligent lineage analysis and root cause detection for data pipelines",
+    version="1.0.0",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json"
 )
 
-# CORS middleware
+# ============================================================================
+# CORS Configuration
+# ============================================================================
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", '["http://localhost:3000", "http://localhost:3001"]')
+try:
+    import json
+    origins = json.loads(CORS_ORIGINS)
+except:
+    origins = ["http://localhost:3000", "http://localhost:3001"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(users_router)
-app.include_router(chat_router)
+# ============================================================================
+# Route Imports
+# ============================================================================
+from routes.auth import router as auth_router
+from routes.connections import router as connections_router
+from routes.events import router as events_router
+from routes.investigations import router as investigations_router
+from routes.chats import router as chats_router
+from routes.github import router as github_router
 
-# Upload directory
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# ============================================================================
+# Register Routers
+# ============================================================================
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(connections_router, prefix="/api/v1")
+app.include_router(events_router, prefix="/api/v1")
+app.include_router(investigations_router, prefix="/api/v1")
+app.include_router(chats_router, prefix="/api/v1")
+app.include_router(github_router, prefix="/api/v1")
 
+# ============================================================================
+# Health Check Endpoints
+# ============================================================================
 
-class QueryRequest(BaseModel):
-    question: str
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint.
+    Used by load balancers and monitoring systems.
+    """
+    return {
+        "status": "ok",
+        "service": "ks-rag",
+        "version": "1.0.0"
+    }
 
 
 @app.get("/")
-def read_root():
-    """Root endpoint - API information."""
+async def root():
+    """
+    API root endpoint.
+    Provides welcome message and documentation links.
+    """
     return {
-        "message": "RAG Chatbot API is running",
-        "version": "2.0.0",
-        "features": [
-            "PDF upload and vector embeddings",
-            "Semantic search with Cohere",
-            "Answer generation with Groq LLM",
-            "User authentication with JWT",
-            "Chat history and conversations"
-        ],
+        "name": "KS-RAG: Root Cause Analysis Generator",
+        "version": "1.0.0",
+        "description": "Intelligent lineage analysis and root cause detection for data pipelines",
+        "docs": "/api/docs",
+        "redoc": "/api/redoc",
+        "openapi": "/api/openapi.json",
         "endpoints": {
-            "Documents": {
-                "POST /upload": "Upload PDFs (max 4) and create embeddings",
-                "POST /query": "Query PDFs (public, no auth required)"
+            "auth": "/api/v1/users",
+            "connections": "/api/v1/connections",
+            "events": "/api/v1/events",
+            "investigations": "/api/v1/investigations",
+            "chats": "/api/v1/chats",
+            "github": "/api/v1/github"
+        }
+    }
+
+
+@app.get("/api/v1")
+async def api_v1_root():
+    """
+    API v1 root endpoint.
+    Lists all available endpoints.
+    """
+    return {
+        "version": "1.0.0",
+        "endpoints": {
+            "authentication": {
+                "register": "POST /api/v1/users/register",
+                "login": "POST /api/v1/users/login",
+                "me": "GET /api/v1/users/me",
+                "refresh": "POST /api/v1/users/refresh"
             },
-            "Authentication": {
-                "POST /users/register": "Register a new user",
-                "POST /users/login": "Login and get JWT token",
-                "GET /users/me": "Get current user info (requires auth)"
+            "connections": {
+                "create": "POST /api/v1/connections",
+                "list": "GET /api/v1/connections",
+                "get": "GET /api/v1/connections/{id}",
+                "verify": "POST /api/v1/connections/{id}/verify",
+                "delete": "DELETE /api/v1/connections/{id}"
             },
-            "Chats": {
-                "POST /chats": "Create a new chat conversation",
-                "GET /chats": "Get all user's chats",
-                "GET /chats/{chat_id}": "Get specific chat with messages",
-                "POST /chats/{chat_id}/messages": "Add message to chat and get response",
-                "PATCH /chats/{chat_id}": "Update chat (title, archive)",
-                "DELETE /chats/{chat_id}": "Delete a chat"
+            "events": {
+                "dbt_webhook": "POST /api/v1/events/dbt-webhook",
+                "github_webhook": "POST /api/v1/events/github-webhook",
+                "manual_query": "POST /api/v1/events/manual-query",
+                "list": "GET /api/v1/events"
+            },
+            "investigations": {
+                "create": "POST /api/v1/investigations",
+                "get": "GET /api/v1/investigations/{id}",
+                "list": "GET /api/v1/investigations",
+                "status": "GET /api/v1/investigations/{id}/status"
+            },
+            "chats": {
+                "create": "POST /api/v1/chats",
+                "list": "GET /api/v1/chats",
+                "get": "GET /api/v1/chats/{id}",
+                "query": "POST /api/v1/chats/{id}/query",
+                "update_title": "PUT /api/v1/chats/{id}/title",
+                "delete": "DELETE /api/v1/chats/{id}"
+            },
+            "github": {
+                "webhook": "POST /api/v1/github/webhook",
+                "authorize": "POST /api/v1/github/authorize",
+                "analysis": "GET /api/v1/github/pr-analysis/{pr_number}"
             }
         }
     }
 
 
-@app.get("/health")
-def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "message": "API is running and ready to accept queries"
-    }
+# ============================================================================
+# Error Handlers
+# ============================================================================
 
-
-@app.post("/upload")
-async def upload_pdfs(files: List[UploadFile] = File(...)):
-    """
-    Upload up to 4 PDFs, process and store embeddings.
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc):
+    """Handle unexpected exceptions with consistent error format."""
+    import traceback
     
-    This will:
-    1. Save uploaded PDFs to the uploads folder
-    2. Extract text and create chunks
-    3. Generate vector embeddings using Cohere
-    4. Store embeddings in MongoDB
+    # Log full traceback
+    print(f"ERROR: {exc}")
+    traceback.print_exc()
     
-    Note: This replaces existing embeddings. For production, you might want
-    to implement incremental updates or separate collections per user.
-    """
-    if len(files) > 4:
-        raise HTTPException(status_code=400, detail="Maximum 4 PDF files allowed.")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": str(exc) if os.getenv("DEBUG") == "true" else "An unexpected error occurred",
+            "type": type(exc).__name__
+        }
+    )
 
-    saved_paths = []
-    for f in files:
-        if not f.filename.lower().endswith(".pdf"):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Only PDF files supported: {f.filename}"
-            )
-        dest = os.path.join(UPLOAD_DIR, f.filename)
-        with open(dest, "wb") as out_file:
-            out_file.write(await f.read())
-        saved_paths.append(dest)
 
+# ============================================================================
+# Startup Events
+# ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Run on application startup."""
+    print("=" * 70)
+    print("KS-RAG API is starting up...")
+    print("=" * 70)
+    
+    # Verify environment
     try:
-        total_chunks = index_documents(saved_paths)
-        return JSONResponse({
-            "status": "success",
-            "message": "PDFs uploaded and indexed successfully",
-            "indexed_files": len(saved_paths),
-            "indexed_chunks": total_chunks,
-            "file_names": [os.path.basename(p) for p in saved_paths]
-        })
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        required_vars = ["MONGO_URI", "SECRET_KEY"]
+        missing = [var for var in required_vars if not os.getenv(var)]
+        
+        if missing:
+            print(f"⚠️  WARNING: Missing environment variables: {', '.join(missing)}")
+        else:
+            print("✓ Required environment variables configured")
     except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error indexing documents: {str(e)}"
-        )
+        print(f"⚠️  Startup check failed: {e}")
+    
+    print("KS-RAG API ready to accept requests")
+    print("Documentation: /api/docs")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Run on application shutdown."""
+    print("=" * 70)
+    print("KS-RAG API is shutting down...")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    host = os.getenv("APP_HOST", "0.0.0.0")
+    port = int(os.getenv("APP_PORT", 8000))
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    
+    print(f"Starting server on {host}:{port}")
+    print(f"Debug mode: {debug}")
+    
+    uvicorn.run(
+        "app:app",
+        host=host,
+        port=port,
+        reload=debug,
+        log_level="info"
+    )
 
 
 @app.post("/query")

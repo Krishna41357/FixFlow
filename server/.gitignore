@@ -1,0 +1,91 @@
+# Environment & Configuration
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# Testing & Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+pytest_cache/
+
+# Database & Temporary
+*.db
+*.sqlite
+*.sqlite3
+*.log
+uploads/
+temp/
+tmp/
+
+# OS Files
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Dependencies (optional, for Docker builds)
+# node_modules/
+
+# Sensitive Files (if accidentally added)
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+secrets.txt
+credentials.json
+
+# System Files
+.env.example.bak
+.gitignore.bak

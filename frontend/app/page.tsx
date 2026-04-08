@@ -3,7 +3,7 @@
 import React from 'react';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import LoginSignup from './components/LoginSignup';
-import Chatbot from './components/Chatbot';
+import PipelineAutopsy from './components/PipelineAutopsy';
 import { Loader2 } from 'lucide-react';
 
 function AppContent() {
@@ -11,16 +11,16 @@ function AppContent() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-red-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-slate-900 flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="w-12 h-12 animate-spin text-red-600 mx-auto mb-4" />
-          <p className="text-gray-600">Loading...</p>
+          <Loader2 className="w-12 h-12 animate-spin text-red-500 mx-auto mb-4" />
+          <p className="text-gray-400">Loading Pipeline Autopsy...</p>
         </div>
       </div>
     );
   }
 
-  return isAuthenticated ? <Chatbot /> : <LoginSignup />;
+  return isAuthenticated ? <PipelineAutopsy /> : <LoginSignup />;
 }
 
 export default function Home() {
