@@ -30,7 +30,7 @@ type AuthContextType = {
   connections: Connection[];
   currentConnection: Connection | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, fullName?: string) => Promise<void>;
+  register: (email: string, password: string, username: string , fullName?: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   fetchConnections: () => Promise<void>;
@@ -110,7 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const register = async (email: string, password: string, fullName?: string) => {
+  const register = async (email: string, password: string, username: string, fullName?: string) => {
     try {
       if (!email || !password) {
         throw new Error('Email and password are required');
@@ -123,6 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const payload = {
         email: email.trim(),
         password,
+        username: username.trim(),
         full_name: fullName?.trim(),
       };
 

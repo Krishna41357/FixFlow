@@ -80,6 +80,7 @@ class UserCreate(BaseModel):
     """Registration payload."""
     email: EmailStr
     username: str = Field(..., min_length=3, max_length=50)
+    full_name: Optional[str] = Field(None, max_length=100)
     password: str = Field(..., min_length=8)
 
     @field_validator("password")
@@ -102,6 +103,7 @@ class UserInDB(MongoBase):
     """User document stored in MongoDB."""
     email: str
     username: str
+    full_name: Optional[str] = None
     hashed_password: str
     is_active: bool = True
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())

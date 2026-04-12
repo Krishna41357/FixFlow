@@ -6,7 +6,7 @@ Handles user registration, login, and JWT token management.
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from models.users import UserCreate, Token, TokenData
+from models.users import UserCreate, UserLogin, Token, TokenData
 from controllers import auth_controller
 
 router = APIRouter(prefix="/users", tags=["auth"])
@@ -79,7 +79,7 @@ async def register(user_data: UserCreate) -> Token:
 
 
 @router.post("/login", response_model=Token)
-async def login(email: str, password: str) -> Token:
+async def login(credentials: UserLogin) -> Token:
     """
     Login with email and password.
     
@@ -95,7 +95,7 @@ async def login(email: str, password: str) -> Token:
     }
     ```
     """
-    token = auth_controller.login_user(email, password)
+    token = auth_controller.login_user(credentials.email, credentials.password)
     
     if not token:
         raise HTTPException(

@@ -202,11 +202,11 @@ async def startup_event():
         missing = [var for var in required_vars if not os.getenv(var)]
         
         if missing:
-            print(f"⚠️  WARNING: Missing environment variables: {', '.join(missing)}")
+            print(f"âš ï¸  WARNING: Missing environment variables: {', '.join(missing)}")
         else:
-            print("✓ Required environment variables configured")
+            print("âœ“ Required environment variables configured")
     except Exception as e:
-        print(f"⚠️  Startup check failed: {e}")
+        print(f"âš ï¸  Startup check failed: {e}")
     
     print("KS-RAG API ready to accept requests")
     print("Documentation: /api/docs")
@@ -237,46 +237,3 @@ if __name__ == "__main__":
         reload=debug,
         log_level="info"
     )
-
-
-@app.post("/query")
-def query_docs(req: QueryRequest):
-    """
-    Query the stored embeddings (public endpoint - no authentication required).
-    
-    For one-off queries without chat history.
-    Use POST /chats for persistent conversations.
-    
-    Request body:
-    {
-        "question": "Your question here"
-    }
-    
-    Response:
-    {
-        "answer": "Generated answer",
-        "sources": [{"text": "...", "pdf_name": "..."}],
-        "question": "Your question"
-    }
-    """
-    question = req.question.strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
-
-    try:
-        answer, sources = answer_query(question)
-        return JSONResponse({
-            "answer": answer,
-            "sources": sources,
-            "question": question
-        })
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error during query: {str(e)}"
-        )
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

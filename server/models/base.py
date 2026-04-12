@@ -1,5 +1,5 @@
 """
-base.py — shared types used across all Pipeline Autopsy schemas.
+base.py - shared types used across all Pipeline Autopsy schemas.
 """
 
 from datetime import datetime, timezone
@@ -10,16 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 def utc_now() -> datetime:
-    """Always return timezone-aware UTC datetime. Replaces deprecated utcnow()."""
     return datetime.now(timezone.utc)
 
 
 class PyObjectId(str):
-    """
-    MongoDB ObjectId ↔ Pydantic v2 compatible type.
-    Accepts ObjectId or valid ObjectId string. Always serialises as str.
-    """
-
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any):
         from pydantic_core import core_schema
@@ -31,18 +25,13 @@ class PyObjectId(str):
                 return value
             raise ValueError(f"Invalid ObjectId: {value!r}")
 
-        return core_schema.with_info_plain_validator_function(
+        return core_schema.no_info_plain_validator_function(
             validate,
             serialization=core_schema.plain_serializer_function_ser_schema(str),
         )
 
 
 class MongoBase(BaseModel):
-    """
-    Base for all documents stored in MongoDB.
-    Handles _id ↔ id aliasing and datetime serialisation.
-    """
-
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
 
     model_config = ConfigDict(
@@ -55,33 +44,30 @@ class MongoBase(BaseModel):
     )
 
 
-# ── Shared enums ──────────────────────────────────────────────────────────────
-
 class EventType(str, Enum):
-    """The three ways a failure investigation can be triggered."""
-    DBT_WEBHOOK   = "dbt_webhook"
-    GITHUB_PR     = "github_pr"
-    MANUAL_QUERY  = "manual_query"
+    DBT_WEBHOOK  = "dbt_webhook"
+    GITHUB_PR    = "github_pr"
+    MANUAL_QUERY = "manual_query"
 
 
 class InvestigationStatus(str, Enum):
-    """Lifecycle of a diagnosis session."""
-    PENDING    = "pending"     # received, not yet processed
-    RUNNING    = "running"     # lineage traversal in progress
-    COMPLETED  = "completed"   # root cause found, AI response ready
-    FAILED     = "failed"      # traversal or AI call errored out
+    PENDING           = "pending"
+    LINEAGE_TRAVERSAL = "lineage_traversal"
+    CONTEXT_BUILDING  = "context_building"
+    AI_ANALYSIS       = "ai_analysis"
+    RUNNING           = "running"
+    COMPLETED         = "completed"
+    FAILED            = "failed"
 
 
 class SeverityLevel(str, Enum):
-    """How badly an asset is affected downstream."""
-    CRITICAL = "critical"   # production dashboard or SLA asset broken
-    HIGH     = "high"       # major model broken
-    MEDIUM   = "medium"     # non-critical model broken
-    LOW      = "low"        # test-only asset
+    CRITICAL = "critical"
+    HIGH     = "high"
+    MEDIUM   = "medium"
+    LOW      = "low"
 
 
 class AssetType(str, Enum):
-    """OpenMetadata entity types we traverse."""
     TABLE     = "table"
     VIEW      = "view"
     DASHBOARD = "dashboard"

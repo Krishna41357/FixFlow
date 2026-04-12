@@ -2505,3 +2505,237 @@ python check_env.py --generate-key  # Generate new SECRET_KEY
 - Deployment with environment-based configuration
 - Docker containerization
 - Cloud secret management (AWS/Azure/Vault)
+
+
+
+
+# ============================================================
+# CONTEXT.MD — PATCH NOTES (April 12, 2026)
+# Apply these updates to the main context document
+# ============================================================
+
+## 1. UPDATE: Header
+
+Change:
+  Last Updated: April 6, 2026
+  Phase: Backend Complete (100%) | Tests Complete (70+ cases) | Frontend Complete (90%)
+
+To:
+  Last Updated: April 12, 2026
+  Phase: Backend Running ✅ | API Tested ✅ | Frontend Pending
+
+
+## 2. UPDATE: Environment Configuration section
+
+Replace the .env example block with:
+
+```env
+# ===== DATABASE =====
+MONGO_URI=mongodb://localhost:27017/rag_database   # ⚠️ Must be rag_database, not ks_rag_demo
+                                                    # All controllers hardcode db["rag_database"]
+
+# ===== AUTHENTICATION =====
+SECRET_KEY=your-super-secret-key-change-this-in-production-12345678
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# ===== OPENMETADATA =====
+OPENMETADATA_URL=http://localhost:8585
+OPENMETADATA_API_KEY=eyJrIjoiM...
+
+# ===== LLM PROVIDERS =====
+OPENAI_API_KEY=sk-...
+CLAUDE_API_KEY=sk-ant-...
+GROQ_API_KEY=gsk_...
+DEFAULT_LLM_PROVIDER=claude
+AI_MODEL=claude-sonnet-4-20250514   # ← use this model string
+
+# ===== GITHUB =====
+GITHUB_APP_ID=123456
+GITHUB_WEBHOOK_SECRET=demo-secret
+
+# ===== API =====
+CORS_ORIGINS=["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"]
+APP_HOST=0.0.0.0
+APP_PORT=8000
+DEBUG=true
+```
+
+
+## 3. UPDATE: Installation & Quick Start
+
+Replace step 1 with:
+
+**1. Install Dependencies (Python 3.14 on Windows)**
+```bash
+# Step 1: Install numpy via conda first (pip can't compile it on Python 3.14)
+conda install numpy -y
+
+# Step 2: Install everything else (binary wheels only — avoids GCC/Rust compile errors)
+cd server
+pip install -r requirements.txt --only-binary=:all:
+```
+
+⚠️ Do NOT use plain `pip install -r requirements.txt` on Python 3.14 — several packages
+will try to compile from source and fail (numpy needs GCC 8.4+, pydantic-core needs Rust).
+
+
+## 4. ADD: New section after "Installation & Quick Start"
+
+### ⚠️ Python 3.14 Compatibility Notes
+
+The project was originally pinned to Python 3.10-3.11 package versions.
+Running on Python 3.14 (Conda) requires the following version changes:
+
+| Package | Original | Installed | Reason |
+|---|---|---|---|
+| `numpy` | `==1.26.2` | `2.4.4` (conda) | No wheel for Py3.14, GCC too old |
+| `pymongo` | `==4.6.0` | `4.16.0` | No wheel for Py3.14 |
+| `pydantic` | `==2.5.0` | `2.12.5` | pydantic-core needs Rust to compile |
+| `bcrypt` | `==3.2.2` | `5.0.0` | No wheel for Py3.14 |
+| `anthropic` | `==0.7.1` | `0.91.0` | No wheel for Py3.14 |
+| `openai` | `==1.3.7` | `2.30.0` | Compatible upgrade |
+| `groq` | `==0.4.1` | `1.1.2` | Compatible upgrade |
+| `coverage` | `==7.3.2` | `7.13.5` | No wheel for Py3.14 |
+
+The updated `requirements.txt` uses `>=` pins instead of `==` for these packages.
+
+
+## 5. UPDATE: models/base.py section
+
+Update the Enums description:
+
+**Enums:**
+- `InvestigationStatus`: PENDING, LINEAGE_TRAVERSAL, CONTEXT_BUILDING, AI_ANALYSIS, RUNNING, COMPLETED, FAILED
+  ⚠️ Note: Original only had PENDING, RUNNING, COMPLETED, FAILED — the middle stages were added
+- `EventType`: dbt_webhook, github_pr, manual_query
+- `SeverityLevel`: critical, high, medium, low
+- `AssetType`: table, view, dashboard, pipeline, topic
+
+Also note: PyObjectId validator was updated from `with_info_plain_validator_function`
+to `no_info_plain_validator_function` to fix pydantic v2.12 compatibility.
+
+
+## 6. UPDATE: models/users.py section
+
+Update UserCreate description:
+- `UserCreate`: email, username, password, full_name (optional) — registration payload
+  ⚠️ username is REQUIRED (3-50 chars, alphanumeric). full_name is optional.
+  Password rules: min 8 chars, at least 1 digit, at least 1 uppercase letter.
+
+Update UserInDB description:
+- `UserInDB`: id, email, username, full_name, hashed_password, is_active, created_at, connection_ids
+
+
+## 7. UPDATE: auth_controller.py section
+
+Replace "Password hashing via passlib + bcrypt" with:
+
+**Password hashing:** Direct `bcrypt` library calls (passlib 1.7.4 is incompatible with bcrypt 5.x)
+```python
+# Correct implementation (passlib removed):
+import bcrypt as bcrypt_lib
+def get_password_hash(password: str) -> str:
+    return bcrypt_lib.hashpw(password[:72].encode(), bcrypt_lib.gensalt()).decode()
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt_lib.checkpw(plain[:72].encode(), hashed.encode())
+```
+⚠️ Password is truncated to 72 bytes before hashing — bcrypt hard limit.
+
+Added `_doc_to_userindb(doc)` helper that all three fetch functions use,
+ensuring username and hashed_password are always included in UserInDB construction.
+
+
+## 8. UPDATE: investigation_controller.py section
+
+Update RootCause fields table:
+
+| Field | Type | Description |
+|---|---|---|
+| `one_line_summary` | str | Single sentence summary (max 200 chars) |
+| `detailed_explanation` | str | Full explanation (max 2000 chars) |
+| `break_point_fqn` | str | FQN of asset where change originated |
+| `break_point_change` | str | Human-readable description of the change |
+| `affected_assets` | List[AffectedAsset] | Downstream assets with severity |
+| `suggested_fixes` | List[SuggestedFix] | Actionable fixes with code snippets |
+| `owner_to_contact` | Optional[str] | Email of break-point asset owner |
+| `confidence` | float | 0.0-1.0 confidence score |
+
+⚠️ Old context doc showed root_cause, responsible_asset, suggested_fix, confidence_score —
+these field names were from an older model version and are no longer correct.
+
+Also note: `.json()` replaced with `.model_dump()` throughout (pydantic v2 migration).
+
+AI calls use direct HTTP requests (not the anthropic SDK) for version independence:
+```python
+url = "https://api.anthropic.com/v1/messages"
+headers = {"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01"}
+```
+
+
+## 9. UPDATE: routes section — Known Behavioral Differences
+
+Add this note under the Authentication routes table:
+
+**Login endpoint behavior:**
+```bash
+# Login takes QUERY PARAMS, not a JSON body:
+POST /api/v1/users/login?email=user@example.com&password=Testpass123
+
+# NOT:
+POST /api/v1/users/login  {"email": "...", "password": "..."}  ← won't work
+```
+
+**Registration requires username:**
+```json
+{
+  "email": "user@example.com",
+  "username": "myusername",
+  "password": "Testpass123",
+  "full_name": "Optional Name"
+}
+```
+
+**Investigation creation — user_id removed from params:**
+```bash
+# Correct (user_id comes from JWT token automatically):
+POST /api/v1/investigations?connection_id=X&event_id=Y&failure_message=Z
+
+# Old (no longer works):
+POST /api/v1/investigations?user_id=X&connection_id=Y&...
+```
+
+
+## 10. UPDATE: Dead Code Removed
+
+Add this section under "Architecture":
+
+### Dead Code Removed (April 12, 2026)
+
+The following leftover code from the old PDF-based RAG chatbot was removed:
+
+| File | Removed | Reason |
+|---|---|---|
+| `app.py` | `@app.post("/query")` endpoint | Used undefined `QueryRequest`, old RAG pattern |
+| `routes/chats.py` | `@router.patch("/{chat_id}")` | Used undefined `ChatUpdate`, `get_chat_by_id` |
+| `routes/chats.py` | Duplicate `@router.delete("/{chat_id}")` | Duplicate of existing delete endpoint |
+| `routes/connections.py` | `from models.base import ErrorResponse` | `ErrorResponse` never defined in base.py |
+
+
+## 11. UPDATE: Verified Working Endpoints (April 12, 2026)
+
+Add this table to the Implementation Status Summary:
+
+### ✅ API Endpoints — Live Tested (April 12, 2026)
+
+| Endpoint | Method | Status | Notes |
+|---|---|---|---|
+| `/health` | GET | ✅ 200 OK | |
+| `/api/v1/users/register` | POST | ✅ 201 Created | Returns JWT token |
+| `/api/v1/users/login` | POST | ✅ 200 OK | Query params, not body |
+| `/api/v1/users/me` | GET | ✅ 200 OK | Bearer token required |
+| `/api/v1/investigations` | GET | ✅ 200 OK | Returns [] when empty |
+| `/api/v1/investigations` | POST | ✅ 201 Created | Async pipeline starts |
+| `/api/v1/investigations/{id}/status` | GET | ✅ 200 OK | Returns failed (no OpenMetadata) |
+
+Investigation pipeline correctly reaches FAILED when OpenMetadata is not running —
+this is expected behavior. Will reach COMPLETED once real OpenMetadata is connected.

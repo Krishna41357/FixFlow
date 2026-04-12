@@ -228,17 +228,16 @@ def get_session(session_id: str, user_id: str) -> Optional[ChatSessionResponse]:
             messages.append(ChatMessage(
                 role=msg.get("role", "user"),
                 content=msg.get("content", ""),
-                timestamp=msg.get("timestamp", datetime.now(timezone.utc))
+                timestamp=str(msg.get("timestamp", datetime.now(timezone.utc).isoformat()))
             ))
         
         return ChatSessionResponse(
             id=str(session["_id"]),
-            user_id=user_id,
             title=session.get("title", "New Session"),
             messages=messages,
             investigation_id=session.get("investigation_id"),
-            created_at=session.get("created_at", datetime.now(timezone.utc)),
-            updated_at=session.get("updated_at", datetime.now(timezone.utc)),
+            created_at=str(session.get("created_at", datetime.now(timezone.utc).isoformat())),
+            updated_at=str(session.get("updated_at", datetime.now(timezone.utc).isoformat())),
             message_count=len(messages)
         )
     except Exception as e:
@@ -271,12 +270,11 @@ def list_sessions(user_id: str, skip: int = 0, limit: int = 20) -> List[ChatSess
             
             result.append(ChatSessionListItem(
                 id=str(session["_id"]),
-                user_id=user_id,
                 title=session.get("title", "New Session"),
                 message_count=len(messages),
-                last_message=last_message,
-                created_at=session.get("created_at", datetime.now(timezone.utc)),
-                updated_at=session.get("updated_at", datetime.now(timezone.utc))
+                last_message_preview=last_message,
+                created_at=str(session.get("created_at", datetime.now(timezone.utc).isoformat())),
+                updated_at=str(session.get("updated_at", datetime.now(timezone.utc).isoformat()))
             ))
         
         return result

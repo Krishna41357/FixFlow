@@ -1,7 +1,5 @@
-"use client";
-
 import React, { useState, useEffect } from 'react';
-import { Mail, Lock, User, UserPlus, LogIn, AlertCircle, Loader2, Moon, Sun, CheckCircle } from 'lucide-react';
+import { Mail, Lock, User, UserPlus, LogIn, AlertCircle, Loader2, Moon, Sun, CheckCircle, AtSign } from 'lucide-react';
 import { useAuth } from './AuthContext';
 
 export default function LoginSignup() {
@@ -35,8 +33,8 @@ export default function LoginSignup() {
       errors.email = 'Invalid email format';
     }
 
-    // Username validation (signup only)
     if (!isLogin) {
+      // Username validation (signup only)
       if (!username) {
         errors.username = 'Username is required';
       } else if (username.length < 3) {
@@ -53,6 +51,10 @@ export default function LoginSignup() {
       errors.password = 'Password is required';
     } else if (password.length < 8) {
       errors.password = 'Password must be at least 8 characters';
+    } else if (!isLogin && !/\d/.test(password)) {
+      errors.password = 'Password must contain at least one digit';
+    } else if (!isLogin && !/[A-Z]/.test(password)) {
+      errors.password = 'Password must contain at least one uppercase letter';
     }
 
     setFieldErrors(errors);
@@ -78,8 +80,9 @@ export default function LoginSignup() {
         setSuccessMessage('Login successful! Redirecting...');
       } else {
         await register(
-          email, 
+          email,
           password,
+          username,
           fullName.trim() || undefined
         );
         setSuccessMessage('Account created! Logging you in...');
@@ -266,6 +269,44 @@ export default function LoginSignup() {
               </div>
             )}
 
+            {/* Username Field (Sign Up Only) */}
+            {!isLogin && (
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                  Username
+                </label>
+                <div className="relative group">
+                  <AtSign className={`absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 transition-colors ${
+                    darkMode ? 'text-gray-400 group-focus-within:text-red-400' : 'text-gray-400 group-focus-within:text-red-500'
+                  }`} />
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => handleFieldChange('username', e.target.value)}
+                    placeholder="john_doe"
+                    disabled={isLoading}
+                    className={`w-full pl-12 pr-4 py-3 rounded-xl border-2 transition-all focus:outline-none focus:scale-105 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      fieldErrors.username
+                        ? 'border-red-500'
+                        : darkMode
+                        ? 'bg-slate-700/50 border-slate-600 focus:border-red-500 text-white placeholder-gray-400'
+                        : 'bg-white border-gray-300 focus:border-red-500 text-black placeholder-gray-400'
+                    }`}
+                  />
+                </div>
+                {fieldErrors.username && (
+                  <p className={`mt-1 text-sm ${darkMode ? 'text-red-400' : 'text-red-600'}`}>
+                    {fieldErrors.username}
+                  </p>
+                )}
+                <p className={`mt-1 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  Letters, numbers, underscores, and hyphens only
+                </p>
+              </div>
+            )}
+
             {/* OpenMetadata Integration Info (Sign Up Only) */}
             {!isLogin && (
               <div className={`p-3 rounded-lg border ${darkMode ? 'bg-blue-900/20 border-blue-700/30' : 'bg-blue-50 border-blue-200'}`}>
@@ -310,7 +351,7 @@ export default function LoginSignup() {
               )}
               {!isLogin && (
                 <p className={`mt-1 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                  Password must be at least 8 characters
+                  Min 8 characters, at least one uppercase letter and one digit
                 </p>
               )}
             </div>

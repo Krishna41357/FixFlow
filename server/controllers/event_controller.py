@@ -166,7 +166,7 @@ def handle_manual_query(
     creates FailureEvent, immediately starts investigation.
     Returns event_id.
     """
-    if not user_id or not payload.asset_fqn:
+    if not user_id or not payload.asset_name:
         print("ERROR handle_manual_query: Missing user_id or asset_fqn")
         return None
     
@@ -178,11 +178,11 @@ def handle_manual_query(
             user_id=user_id,
             connection_id=payload.connection_id,
             event_type="manual_query",
-            source_id=payload.asset_fqn,
-            failure_message=payload.failure_query,
+            source_id=payload.asset_name,
+            failure_message=payload.question,
             metadata={
-                "asset_fqn": payload.asset_fqn,
-                "query": payload.failure_query
+                "asset_name": payload.asset_name,
+                "query": payload.question
             }
         )
         

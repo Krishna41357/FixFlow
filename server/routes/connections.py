@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 
 from models.users import ConnectionCreate, ConnectionResponse
-from models.base import ErrorResponse
 from controllers import connection_controller
 from routes.auth import get_current_user
 from models.users import TokenData
@@ -60,7 +59,7 @@ async def create_connection(
             detail="Failed to create connection. Check OpenMetadata credentials."
         )
     
-    return connection.dict()
+    return connection.model_dump()
 
 
 @router.get("", response_model=List[ConnectionResponse])
@@ -124,7 +123,7 @@ async def get_connection(
             detail="Connection not found"
         )
     
-    return connection.dict()
+    return connection.model_dump()
 
 
 @router.post("/{connection_id}/verify", response_model=dict, status_code=status.HTTP_200_OK)
@@ -159,7 +158,7 @@ async def verify_connection(
         )
     
     is_valid = connection_controller.verify_openmetadata_connection(
-        url=connection.openmetadata_url,
+        url=connection.openmetadata_host,
         token=connection.openmetadata_token
     )
     
