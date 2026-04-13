@@ -8,7 +8,7 @@ A GitHub PR bot catches schema-breaking changes **before they're merged**, posti
 
 ![Status](https://img.shields.io/badge/Backend-100%25%20Complete-green?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Tests-70%2B%20Comprehensive-blue?style=for-the-badge)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 ---
@@ -18,18 +18,18 @@ A GitHub PR bot catches schema-breaking changes **before they're merged**, posti
 - **3 Input Sources:** dbt webhooks, GitHub PR webhooks, manual chat queries
 - **Lineage Traversal:** Real-time upstream navigation via OpenMetadata API
 - **Schema Diff Detection:** Identifies breaking changes (renames, drops, type changes)
-- **AI Root Cause Analysis:** Claude/GPT analysis with structured JSON responses
+- **AI Root Cause Analysis:** Groq (llama3-70b-8192) with structured JSON responses
 - **Chat Interface:** Multi-turn conversation with investigation context
 - **GitHub PR Bot:** Auto-comment with impact analysis before merge
 - **70+ Comprehensive Tests:** Full coverage with edge cases and error handling
-- **Production Ready:** Fully tested, documented, ready to deploy
+- **Docker Compose:** Full stack deployment with OpenMetadata, MongoDB, Elasticsearch
 
 ---
 
 ## 📊 Project Status
 
 | Component | Layer | Status | Code Location |
-|-----------|-------|--------|-----------------|
+|-----------|-------|--------|---------------|
 | dbt Test Webhook | Input | ✅ Complete | [routes/events.py](server/routes/events.py) |
 | GitHub PR Webhook | Input | ✅ Complete | [routes/github.py](server/routes/github.py) |
 | Manual Query (Chat) | Input | ✅ Complete | [routes/chats.py](server/routes/chats.py) |
@@ -37,29 +37,111 @@ A GitHub PR bot catches schema-breaking changes **before they're merged**, posti
 | Lineage Engine | Core | ✅ Complete | [controllers/lineage_controller.py](server/controllers/lineage_controller.py) |
 | Context Builder | Core | ✅ Complete | [controllers/investigation_controller.py](server/controllers/investigation_controller.py) |
 | AI Reasoning Layer | Core | ✅ Complete | [controllers/investigation_controller.py](server/controllers/investigation_controller.py) |
-| Chat UI | Frontend | ⏳ Pending | [frontend/app/components/](frontend/app/components/) |
-| Lineage Visualization | Frontend | ⏳ Pending | [frontend/app/components/](frontend/app/components/) |
+| Chat UI | Frontend | ✅ Complete | [frontend/app/components/](frontend/app/components/) |
+| Lineage Visualization | Frontend | ✅ Complete | [frontend/app/components/LineageVisualizer.tsx](frontend/app/components/) |
 
-**Backend:** 100% Complete (7 of 7 components)  
-**Tests:** 70+ comprehensive test cases with edge case coverage  
-**Frontend:** Pending (2 components, ~5-7 days estimated)  
+**Backend:** 100% Complete (7 of 7 components)
+**Tests:** 70+ comprehensive test cases
+**Frontend:** 90% Complete (7 of 7 components implemented)
 
 ---
 
-## 🚀 Quick Start
+## ⚙️ Verified Working Endpoints (April 12, 2026)
+
+| Endpoint | Method | Status | Notes |
+|----------|--------|--------|-------|
+| `/health` | GET | ✅ 200 OK | |
+| `/api/v1/users/register` | POST | ✅ 201 Created | Returns JWT token |
+| `/api/v1/users/login` | POST | ✅ 200 OK | Body JSON, not query params |
+| `/api/v1/users/me` | GET | ✅ 200 OK | Bearer token required |
+| `/api/v1/connections` | POST | ✅ 201 Created | Use `name` + `openmetadata_host` fields |
+| `/api/v1/connections` | GET | ✅ 200 OK | Returns masked tokens |
+| `/api/v1/events/manual-query` | POST | ✅ 202 Accepted | Starts async investigation |
+| `/api/v1/investigations` | GET | ✅ 200 OK | Returns `[]` when empty |
+
+---
+
+## 🚀 Quick Start (Docker — Recommended)
 
 ### Prerequisites
-- Python 3.10+
+- Docker Desktop (running)
+- 8GB+ RAM (Elasticsearch needs ~2GB)
+
+### 1. Clone & Configure
+
+```bash
+git clone https://github.com/Krishna41357/Pipeline-Autopsy.git
+cd Pipeline-Autopsy
+```
+
+Create a `.env` file at the **project root** (same level as `docker-compose.yml`):
+
+```env
+SECRET_KEY=your-secret-key-min-32-chars-change-this
+GROQ_API_KEY=gsk_your_groq_key_here
+DEFAULT_LLM_PROVIDER=groq
+AI_MODEL=llama3-70b-8192
+OPENMETADATA_API_KEY=your-openmetadata-bot-token
+DEBUG=true
+```
+
+> ⚠️ **Important:** The root `.env` is for Docker Compose.
+> `server/.env` is for local non-Docker development.
+> Both must exist with appropriate values.
+
+### 2. Pull Docker Images (first time only)
+
+```bash
+docker pull mongo:7.0
+docker pull postgres:13
+docker pull elasticsearch:8.10.2
+docker pull openmetadata/server:1.3.1
+```
+
+### 3. Start the Stack
+
+```bash
+docker-compose up -d
+```
+
+> OpenMetadata takes ~2-3 minutes to boot. Watch progress:
+> ```bash
+> docker-compose logs -f openmetadata-server
+> ```
+> Wait until you see: `Started @Xms to org.eclipse.jetty`
+
+### 4. Get OpenMetadata Bot Token
+
+1. Open `http://localhost:8585` in your browser
+2. Sign up / log in
+3. Navigate to **Settings → Integrations → Bots → ingestion-bot**
+4. Copy the **JWT Token**
+5. Update `OPENMETADATA_API_KEY` in your root `.env`
+6. Restart backend: `docker-compose restart backend`
+
+### 5. Verify Everything is Running
+
+```bash
+curl http://localhost:8000/health
+# Expected: {"status":"ok","service":"ks-rag","version":"1.0.0"}
+
+curl http://localhost:8585/api/v1/system/status
+# Expected: {"status":"healthy"}
+```
+
+---
+
+## 🚀 Local Development (Without Docker)
+
+### Prerequisites
+- Python 3.11 (recommended) or 3.10+
+- MongoDB running locally
 - Node.js 18+
-- MongoDB 5.0+
-- API Keys: [OpenMetadata](https://docs.open-metadata.org/), [OpenAI](https://platform.openai.com/), [Claude](https://console.anthropic.com/)
 
 ### Backend Setup
 
-**1. Clone & Install**
 ```bash
-git clone https://github.com/Krishna41357/Pipeline-Autopsy.git
-cd Pipeline-Autopsy/server
+cd server
 
 # Create virtual environment
 python -m venv venv
@@ -69,138 +151,154 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-**2. Configure Environment**
-```bash
-cp .env.example .env  # Already provided with demo values
-```
+Configure `server/.env`:
 
-**Edit `server/.env` (key variables):**
 ```env
-# MongoDB
-MONGO_URI=mongodb://localhost:27017/pipeline_autopsy_db
+# Database — must be rag_database (hardcoded in controllers)
+MONGO_URI=mongodb://localhost:27017/rag_database
 
 # Authentication
-SECRET_KEY=your-secret-key-change-in-production
+SECRET_KEY=your-secret-key-min-32-chars
 
 # OpenMetadata
 OPENMETADATA_URL=http://localhost:8585
-OPENMETADATA_API_KEY=your-openmetadata-token
+OPENMETADATA_API_KEY=your-ingestion-bot-token
 
-# AI Providers (choose one or more)
-OPENAI_API_KEY=sk-...
-CLAUDE_API_KEY=sk-ant-...
-GROQ_API_KEY=gsk-...
-DEFAULT_LLM_PROVIDER=claude
+# AI — Groq recommended
+GROQ_API_KEY=gsk_your_key_here
+DEFAULT_LLM_PROVIDER=groq
+AI_MODEL=llama3-70b-8192
 
-# GitHub App (for PR bot)
-GITHUB_APP_ID=your-github-app-id
-GITHUB_WEBHOOK_SECRET=your-webhook-secret
-
-# API Configuration
-CORS_ORIGINS=["http://localhost:3000", "http://localhost:8000"]
+# API
+CORS_ORIGINS=["http://localhost:3000"]
 APP_HOST=0.0.0.0
 APP_PORT=8000
+DEBUG=true
 ```
 
-**3. Start MongoDB**
-```bash
-# Ensure MongoDB is running
-mongosh --eval "db.adminCommand('ping')"
-```
-
-**4. Run the Server**
 ```bash
 python app.py
 # Server starts on http://localhost:8000
 ```
 
-**5. Verify Setup**
-```bash
-# Check health
-curl http://localhost:8000/health
-
-# View API documentation
-curl http://localhost:8000/api/docs  # Swagger UI
-```
-
-### Run Tests
+### Frontend Setup
 
 ```bash
-# Install test dependencies (already in requirements.txt)
-pip install pytest pytest-cov
-
-# Run all tests (70+ test cases)
-pytest tests/ -v
-
-# Run specific test suite
-pytest tests/test_auth_controller.py -v
-pytest tests/test_lineage_controller.py -v
-pytest tests/test_investigation_controller.py -v
-pytest tests/test_event_controller.py -v
-pytest tests/test_other_controllers.py -v
-
-# Generate coverage report
-pytest tests/ --cov=controllers --cov-report=html
-# Opens htmlcov/index.html
-```
-
-**Expected Test Output:**
-```
-tests/test_auth_controller.py ........................... 25 tests PASSED
-tests/test_lineage_controller.py ........................ 15 tests PASSED
-tests/test_investigation_controller.py .................. 15 tests PASSED
-tests/test_event_controller.py .......................... 12 tests PASSED
-tests/test_other_controllers.py ......................... 30 tests PASSED
-======================== 97 tests in 2.34s =========================
-```
-
-### Frontend Setup (Next Phase)
-
-```bash
-cd ../frontend
+cd frontend
 npm install
-
-# Create .env.local
 echo "NEXT_PUBLIC_API_BASE_URL=http://localhost:8000" > .env.local
-
 npm run dev
 # Frontend starts on http://localhost:3000
 ```
 
 ---
 
-## 📖 API Quick Reference
+## 📖 API Reference
+
+### ⚠️ Known Behavioral Differences from Original Docs
+
+These were discovered during live testing (April 12, 2026):
+
+**1. Connection fields use different names than old docs:**
+```json
+// ✅ Correct
+{
+  "name": "Production",
+  "openmetadata_host": "http://localhost:8585",
+  "openmetadata_token": "eyJ...",
+  "github_repo": "owner/repo"   // optional, must match pattern owner/repo
+}
+
+// ❌ Wrong (old docs)
+{
+  "workspace_name": "Production",
+  "openmetadata_url": "http://localhost:8585"
+}
+```
+
+**2. Manual query fields:**
+```json
+// ✅ Correct
+{
+  "asset_name": "sample_data.ecommerce_db.shopify.dim_customer",
+  "question": "Why is this table failing?",
+  "connection_id": "your-connection-id"
+}
+
+// ❌ Wrong (old docs)
+{
+  "asset_fqn": "...",
+  "failure_query": "..."
+}
+```
+
+**3. Login takes JSON body (not query params):**
+```bash
+# ✅ Correct
+POST /api/v1/users/login
+Body: {"email": "user@example.com", "password": "Testpass123"}
+
+# ❌ Wrong
+POST /api/v1/users/login?email=...&password=...
+```
+
+---
 
 ### Authentication
+
 ```bash
-# Register user
+# Register
 curl -X POST http://localhost:8000/api/v1/users/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "secure123", "full_name": "Test User"}'
+  -d '{
+    "email": "user@example.com",
+    "username": "myusername",
+    "password": "Testpass123",
+    "full_name": "Optional Name"
+  }'
+# Returns: {"access_token": "eyJ...", "token_type": "bearer"}
 
-# Login (get JWT token)
-TOKEN=$(curl -X POST http://localhost:8000/api/v1/users/login \
+# Login
+curl -X POST http://localhost:8000/api/v1/users/login \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "secure123"}' \
-  | jq -r '.access_token')
-
-echo "Token: $TOKEN"
+  -d '{"email": "user@example.com", "password": "Testpass123"}'
 ```
 
 ### Create Connection
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/connections \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "workspace_name": "Production",
-    "openmetadata_url": "http://localhost:8585",
-    "openmetadata_token": "your-token",
-    "github_repo": "myteam/data-repo"
+    "name": "Production",
+    "openmetadata_host": "http://localhost:8585",
+    "openmetadata_token": "your-ingestion-bot-token"
   }'
+# Returns: {"id": "...", "name": "Production", ...}
 ```
 
-### Trigger Investigation (dbt Webhook)
+### Trigger Investigation via Manual Query
+
+```bash
+# Step 1: Create event (starts investigation automatically)
+curl -X POST http://localhost:8000/api/v1/events/manual-query \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "asset_name": "sample_data.ecommerce_db.shopify.dim_customer",
+    "question": "Why is this table failing?",
+    "connection_id": "YOUR_CONNECTION_ID"
+  }'
+# Returns: {"event_id": "...", "status": "accepted", "message": "Investigation started"}
+
+# Step 2: Poll for results
+curl http://localhost:8000/api/v1/investigations \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Trigger Investigation via dbt Webhook
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/events/dbt-webhook \
   -H "Content-Type: application/json" \
@@ -214,30 +312,25 @@ curl -X POST http://localhost:8000/api/v1/events/dbt-webhook \
   }'
 ```
 
-### Start Chat Session & Query
+### Chat Sessions
+
 ```bash
 # Create session
-SESSION=$(curl -X POST http://localhost:8000/api/v1/chats \
-  -H "Authorization: Bearer $TOKEN" \
+curl -X POST http://localhost:8000/api/v1/chats \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{}' \
-  | jq -r '.session_id')
+  -d '{"title": "Orders Investigation"}'
 
 # Send query
-curl -X POST http://localhost:8000/api/v1/chats/$SESSION/query \
-  -H "Authorization: Bearer $TOKEN" \
+curl -X POST http://localhost:8000/api/v1/chats/SESSION_ID/query \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "message": "Why is my pipeline breaking?",
-    "asset_fqn": "snowflake.prod.orders_daily"
-  }'
+  -d '{"message": "Why is my pipeline breaking?"}'
 ```
 
 ---
 
 ## 🏗️ Architecture Overview
-
-### System Design (9 Components)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -251,16 +344,18 @@ curl -X POST http://localhost:8000/api/v1/chats/$SESSION/query \
                            ▼
          ┌─────────────────────────────────────┐
          │  EVENT ROUTER (Layer 2)              │
-         │  Normalize all inputs                │
+         │  Normalize all inputs → FailureEvent │
          └────────┬────────────────────────────┘
                   │
         ┌─────────┴──────────────────────┐
         │  BACKEND CORE (Layer 3)         │
         ├────────────────────────────────┤
         │ ✓ Lineage Traversal            │
+        │   (OpenMetadata REST API)      │
         │ ✓ Schema Diff Detection        │
         │ ✓ Context Building             │
         │ ✓ AI Root Cause Analysis       │
+        │   (Groq llama3-70b-8192)       │
         └────────┬──────────────────────┘
                  │
         ┌────────┴──────────────────────┐
@@ -275,19 +370,126 @@ curl -X POST http://localhost:8000/api/v1/chats/$SESSION/query \
 
 **Backend:**
 - **Framework:** FastAPI 0.104.1
-- **Database:** MongoDB 5.0+
-- **Authentication:** JWT + HTTPBearer
-- **LLM APIs:** Claude, OpenAI, Groq
+- **Database:** MongoDB (`rag_database` — hardcoded in controllers)
+- **Authentication:** JWT (python-jose) + bcrypt (direct, no passlib)
+- **LLM:** Groq `llama3-70b-8192` (primary), OpenAI/Claude (fallback)
 - **External APIs:** OpenMetadata REST API, GitHub API
-- **Testing:** Pytest with 70+ comprehensive test cases
-- **Security:** bcrypt, passlib, CORS
+- **Testing:** Pytest 70+ test cases, 85%+ coverage
 
-**Frontend (Pending):**
-- **Framework:** Next.js 16
-- **Language:** TypeScript
-- **Styling:** TailwindCSS
-- **Visualization:** D3.js or Cytoscape.js
-- **State Management:** React Context API
+**Infrastructure (Docker):**
+- MongoDB 7.0
+- PostgreSQL 13 (OpenMetadata backend)
+- Elasticsearch 8.10.2 (OpenMetadata search)
+- OpenMetadata Server 1.3.1
+
+**Frontend:**
+- Next.js 16 + React 19 + TypeScript
+- Tailwind CSS 4.0
+- D3.js 7.8.5 (lineage visualization)
+
+---
+
+## ⚠️ Important Implementation Notes
+
+### Database Name
+All controllers hardcode `rag_database` as the MongoDB database name:
+```python
+db = client["rag_database"]  # hardcoded in all controllers
+```
+Always use `MONGO_URI=mongodb://host:27017/rag_database`.
+
+### Password Hashing
+Uses `bcrypt` directly — **not** passlib (incompatible with bcrypt 4.x+):
+```python
+import bcrypt as bcrypt_lib
+# Passwords truncated to 72 bytes (bcrypt hard limit)
+```
+
+### AI Provider
+Groq is the recommended provider. Claude/OpenAI keys can be set to `skip` if unused:
+```env
+DEFAULT_LLM_PROVIDER=groq
+AI_MODEL=llama3-70b-8192
+OPENAI_API_KEY=skip
+CLAUDE_API_KEY=skip
+```
+
+### Docker .env Location
+```
+KS-RAG/
+├── .env                  ← Docker Compose reads this (root)
+├── docker-compose.yml
+└── server/
+    └── .env              ← Local development reads this
+```
+
+---
+
+## 🐛 Troubleshooting
+
+**`GROQ_API_KEY variable is not set` warning:**
+- Ensure `.env` exists at project root (same folder as `docker-compose.yml`)
+- Add `env_file: - .env` to backend service in `docker-compose.yml`
+
+**`mongo:7.0-alpine` not found:**
+- Use `mongo:7.0` — MongoDB does not publish alpine variants for 7.x
+
+**OpenMetadata fails with `relation does not exist`:**
+- Database migration hasn't run. Add `openmetadata-migrate` service to compose:
+  ```yaml
+  openmetadata-migrate:
+    image: openmetadata/server:1.3.1
+    command: "./bootstrap/bootstrap_storage.sh migrate-all"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    restart: "no"
+  ```
+- Run `docker-compose down -v` then `docker-compose up -d` for clean start
+
+**Investigations return empty `[]`:**
+- Check `MONGO_URI` in running container points to `rag_database`
+- Verify `GROQ_API_KEY` and `OPENMETADATA_API_KEY` are not blank in container
+
+**`docker exec` returns 500 error on Windows:**
+- Remove `-it` flag: `docker exec container_name mongosh --eval "..."`
+- Or update Docker Desktop to latest version
+
+**Server returns 422 on connection creation:**
+- Use `name` (not `workspace_name`) and `openmetadata_host` (not `openmetadata_url`)
+- `github_repo` must match pattern `owner/repo` or be omitted entirely
+
+**Token expires after 1 hour:**
+- User session tokens expire. Use ingestion-bot JWT token for `OPENMETADATA_API_KEY` — it has `"exp": null` (never expires)
+
+---
+
+## 🧪 Test Suite
+
+```bash
+cd server
+
+# Run all 70+ tests
+pytest tests/ -v
+
+# Run specific suite
+pytest tests/test_auth_controller.py -v
+pytest tests/test_lineage_controller.py -v
+pytest tests/test_investigation_controller.py -v
+pytest tests/test_event_controller.py -v
+pytest tests/test_other_controllers.py -v
+
+# Coverage report
+pytest tests/ --cov=controllers --cov-report=html
+```
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| test_auth_controller.py | 25 | Password, JWT, registration, login |
+| test_lineage_controller.py | 15 | Traversal, break detection, errors |
+| test_investigation_controller.py | 15 | Pipeline, AI context, retry logic |
+| test_event_controller.py | 12 | dbt/GitHub/manual webhooks |
+| test_other_controllers.py | 30 | Connections, GitHub, chat CRUD |
 
 ---
 
@@ -295,173 +497,80 @@ curl -X POST http://localhost:8000/api/v1/chats/$SESSION/query \
 
 ```
 Pipeline-Autopsy/
-├── server/                          # FastAPI backend
-│   ├── app.py                       # Entry point
-│   ├── requirements.txt              # Dependencies (updated)
-│   ├── .env                          # Configuration (demo values)
-│   ├── context.md                    # Architecture documentation
+├── .env                              # ← Docker Compose env (root)
+├── docker-compose.yml                # Full stack deployment
+├── README.md
+│
+├── server/                           # FastAPI backend
+│   ├── app.py                        # Entry point
+│   ├── requirements.txt              # Python dependencies
+│   ├── Dockerfile                    # Python 3.11-slim
+│   ├── .env                          # ← Local dev env (server/)
 │   │
 │   ├── routes/                       # API endpoints
-│   │   ├── auth.py                  # User registration/login
-│   │   ├── connections.py           # OpenMetadata config
-│   │   ├── events.py                # dbt webhook + event intake
-│   │   ├── investigations.py         # Investigation status/details
-│   │   ├── chats.py                 # Chat sessions + queries
-│   │   └── github.py                # GitHub webhook + PR bot
+│   │   ├── auth.py
+│   │   ├── connections.py
+│   │   ├── events.py
+│   │   ├── investigations.py
+│   │   ├── chats.py
+│   │   └── github.py
 │   │
 │   ├── controllers/                  # Business logic
-│   │   ├── auth_controller.py       # JWT + password handling
-│   │   ├── lineage_controller.py    # OpenMetadata traversal
-│   │   ├── investigation_controller.py # Investigation pipeline + AI
-│   │   ├── event_controller.py      # Event normalization
-│   │   ├── connection_controller.py # Connection management
-│   │   ├── github_controller.py     # PR signature + diff parsing
-│   │   └── chat_controller.py       # Chat session management
+│   │   ├── auth_controller.py        # bcrypt direct (no passlib)
+│   │   ├── lineage_controller.py     # OpenMetadata traversal
+│   │   ├── investigation_controller.py
+│   │   ├── event_controller.py
+│   │   ├── connection_controller.py
+│   │   ├── github_controller.py
+│   │   └── chat_controller.py
 │   │
-│   ├── models/                       # Pydantic schemas
-│   │   ├── base.py                  # Common utilities
-│   │   ├── user.py                  # User model
-│   │   ├── chat.py                  # Chat/session/message models
-│   │   ├── events.py                # Event models
-│   │   ├── investigations.py         # Investigation models
-│   │   ├── lineage.py               # Lineage/node models
-│   │   └── github.py                # GitHub webhook payload
+│   ├── models/                       # Pydantic v2 schemas
+│   │   ├── base.py
+│   │   ├── users.py                  # ConnectionCreate uses name + openmetadata_host
+│   │   ├── events.py                 # ManualQueryPayload uses asset_name + question
+│   │   ├── investigations.py
+│   │   ├── lineage.py
+│   │   ├── github.py
+│   │   └── chat.py
 │   │
-│   ├── tests/                        # Test suite (70+ tests)
-│   │   ├── conftest.py              # Pytest fixtures
-│   │   ├── test_auth_controller.py (25 tests)
-│   │   ├── test_lineage_controller.py (15 tests)
-│   │   ├── test_investigation_controller.py (15 tests)
-│   │   ├── test_event_controller.py (12 tests)
-│   │   └── test_other_controllers.py (30 tests)
-│   │
-│   └── utils/                        # Utilities
-│       └── security.py              # Security helpers
+│   └── tests/                        # 70+ test cases
+│       ├── conftest.py
+│       ├── test_auth_controller.py
+│       ├── test_lineage_controller.py
+│       ├── test_investigation_controller.py
+│       ├── test_event_controller.py
+│       └── test_other_controllers.py
 │
-├── frontend/                         # Next.js frontend (pending)
-│   ├── app/
-│   │   ├── layout.tsx               # Root layout
-│   │   ├── page.tsx                 # Home page
-│   │   └── components/
-│   │       ├── ChatInterface.tsx     # ⏳ Chat UI (pending)
-│   │       ├── LineageMap.tsx        # ⏳ Lineage visualization (pending)
-│   │       ├── LoginSignup.tsx       # User auth UI
-│   │       └── AuthContext.tsx       # Auth state management
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── .env.local                   # Frontend config
-│
-├── .env                              # (Demo values provided)
-├── COMPONENT_CHECKLIST.md            # Status + setup guide
-├── TESTING.md                        # Test suite documentation
-├── context.md                        # Architecture + API reference
-└── README.md                         # This file
+└── frontend/                         # Next.js 16 frontend
+    ├── app/
+    │   ├── components/
+    │   │   ├── AuthContext.tsx
+    │   │   ├── LoginSignup.tsx
+    │   │   ├── PipelineAutopsy.tsx
+    │   │   ├── InvestigationHistory.tsx
+    │   │   ├── ConnectionManager.tsx
+    │   │   └── LineageVisualizer.tsx  # D3.js graph
+    │   └── hooks/
+    │       └── useApi.ts
+    ├── package.json
+    └── Dockerfile
 ```
 
 ---
 
-## 🧪 Test Suite Overview
-
-**70+ comprehensive tests** covering all 7 controllers:
-
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| test_auth_controller.py | 25 | Password, JWT, registration, login, user retrieval |
-| test_lineage_controller.py | 15 | Lineage traversal, break point detection, error handling |
-| test_investigation_controller.py | 15 | Investigation pipeline, AI context, AI calling with retry |
-| test_event_controller.py | 12 | dbt/GitHub/manual webhooks, event retrieval |
-| test_other_controllers.py | 30 | Connections, GitHub, chat (CRUD + auth) |
-
-**Key Features:**
-- ✅ Mock dependencies (MongoDB, OpenAI, OpenMetadata)
-- ✅ Happy path + error cases + edge cases
-- ✅ Authorization checks
-- ✅ Retry logic testing
-- ✅ 85%+ coverage target
-- ✅ CI/CD ready (pytest + coverage)
-
-See [TESTING.md](TESTING.md) for detailed test documentation.
-
----
-
-## 📚 Key Documentation
+## 📚 Documentation
 
 | File | Purpose |
 |------|---------|
-| [context.md](server/context.md) | Architecture, component breakdown, API examples |
-| [TESTING.md](TESTING.md) | Test suite guide, running tests, coverage goals |
-| [COMPONENT_CHECKLIST.md](COMPONENT_CHECKLIST.md) | Setup instructions, troubleshooting, quick reference |
+| [server/context.md](server/context.md) | Full architecture, patch notes, API examples |
+| [TESTING.md](TESTING.md) | Test suite guide and coverage goals |
 
 ---
 
-## 🔌 Key API Endpoints
+## 👨‍💻 Author
 
-| Method | Endpoint | Description | Auth |
-|--------|----------|-------------|------|
-| **Users** | | | |
-| POST | `/api/v1/users/register` | Register new user | ❌ |
-| POST | `/api/v1/users/login` | Login user (get JWT token) | ❌ |
-| GET | `/api/v1/users/{id}` | Get user details | ✅ |
-| **Connections** | | | |
-| POST | `/api/v1/connections` | Create OpenMetadata connection | ✅ |
-| GET | `/api/v1/connections` | List user's connections | ✅ |
-| GET | `/api/v1/connections/{id}` | Get connection details | ✅ |
-| POST | `/api/v1/connections/verify` | Test connection to OpenMetadata | ✅ |
-| DELETE | `/api/v1/connections/{id}` | Delete connection | ✅ |
-| **Events** | | | |
-| POST | `/api/v1/events/dbt-webhook` | Handle dbt test failure | ❌ (webhook) |
-| POST | `/api/v1/github/webhook` | Handle GitHub PR webhook | ❌ (signed) |
-| **Investigations** | | | |
-| GET | `/api/v1/investigations/{id}` | Get investigation details | ✅ |
-| GET | `/api/v1/investigations/{id}/status` | Get investigation status | ✅ |
-| GET | `/api/v1/investigations/user/{user_id}` | List user's investigations | ✅ |
-| **Chat** | | | |
-| POST | `/api/v1/chats` | Create chat session | ✅ |
-| GET | `/api/v1/chats/{id}` | Get session details | ✅ |
-| GET | `/api/v1/chats` | List user's sessions | ✅ |
-| POST | `/api/v1/chats/{id}/query` | Send query + investigate | ✅ |
-| PUT | `/api/v1/chats/{id}` | Update session title | ✅ |
-| DELETE | `/api/v1/chats/{id}` | Delete session | ✅ |
-
----
-
-## 🐛 Troubleshooting
-
-**Server won't start:**
-- Ensure MongoDB is running: `mongosh --eval "db.adminCommand('ping')"`
-- Check `.env` file exists: `cat server/.env`
-- Try: `python app.py` from server directory, not root
-
-**Tests fail to import:**
-- Run from root directory, not server/: `cd /c/Users/BIT/KS-RAG`
-- Ensure pytest.ini exists in root
-- Check Python path: `echo $PYTHONPATH`
-
-**API returns 401 Unauthorized:**
-- Ensure token is in Authorization header: `Authorization: Bearer <token>`
-- Tokens expire after 30 minutes
-- Check SECRET_KEY in .env matches token generation
-
-**OpenMetadata connection fails:**
-- Verify OPENMETADATA_URL is accessible
-- Check OPENMETADATA_API_KEY is valid
-- For testing, tests use mocked API responses
-
----
-
-## 🎓 Learning Resources
-
-- [OpenMetadata Documentation](https://docs.open-metadata.org/)
-- [FastAPI Guide](https://fastapi.tiangolo.com/)
-- [MongoDB Python Driver](https://pymongo.readthedocs.io/)
-- [Pytest Documentation](https://docs.pytest.org/)
-
----
-
-## 👨‍💻 Authors
-
-**Krishna Srivastava**  
-GitHub: [@Krishna41357](https://github.com/Krishna41357)  
+**Krishna Srivastava**
+GitHub: [@Krishna41357](https://github.com/Krishna41357)
 Email: krishnasrivastava41357@gmail.com
 
 ---
@@ -469,17 +578,6 @@ Email: krishnasrivastava41357@gmail.com
 ## 📄 License
 
 MIT License — See LICENSE file for details
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Commit changes: `git commit -am 'Add feature'`
-4. Push to branch: `git push origin feature/your-feature`
-5. Submit a pull request
 
 ---
 

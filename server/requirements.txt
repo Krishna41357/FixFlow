@@ -11,11 +11,12 @@ pydantic[email]>=2.7.0
 python-dotenv==1.0.0
 
 # ===== DATABASE =====
-pymongo>=4.15.2
+pymongo>=4.6.0          # ✅ fixed: 4.15.2 doesn't exist, 4.6.0+ works on py3.11
 
 # ===== AUTHENTICATION & SECURITY =====
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+# ✅ removed passlib[bcrypt] — incompatible with bcrypt 4.x+
+# your auth_controller.py uses bcrypt directly (per patch notes)
 bcrypt>=4.0.0
 
 # ===== AI/LLM PROVIDERS =====
