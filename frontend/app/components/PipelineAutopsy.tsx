@@ -43,8 +43,8 @@ function OnboardingConnectionForm({
 }) {
   const api = useConnectionApi();
   const [formData, setFormData] = useState({
-    workspace_name: '',
-    openmetadata_url: '',
+    name: '',
+    openmetadata_host: '',
     openmetadata_token: '',
     github_repo: '',
   });
@@ -55,11 +55,11 @@ function OnboardingConnectionForm({
 
   const validate = () => {
     const e: Record<string, string> = {};
-    if (!formData.workspace_name.trim()) e.workspace_name = 'Workspace name is required';
-    if (!formData.openmetadata_url.trim()) {
-      e.openmetadata_url = 'OpenMetadata URL is required';
+    if (!formData.name.trim()) e.name = 'Workspace name is required';
+    if (!formData.openmetadata_host.trim()) {
+      e.openmetadata_host = 'OpenMetadata URL is required';
     } else {
-      try { new URL(formData.openmetadata_url); } catch { e.openmetadata_url = 'Invalid URL format'; }
+      try { new URL(formData.openmetadata_host); } catch { e.openmetadata_host = 'Invalid URL format'; }
     }
     if (!formData.openmetadata_token.trim()) e.openmetadata_token = 'Access token is required';
     else if (formData.openmetadata_token.length < 10) e.openmetadata_token = 'Token appears too short';
@@ -73,8 +73,8 @@ function OnboardingConnectionForm({
     if (!validate()) return;
     setIsSubmitting(true);
     const result = await api.createConnection({
-      workspace_name: formData.workspace_name,
-      openmetadata_url: formData.openmetadata_url,
+      name: formData.name,
+      openmetadata_host: formData.openmetadata_host,
       openmetadata_token: formData.openmetadata_token,
       github_repo: formData.github_repo || null,
     });
@@ -112,23 +112,23 @@ function OnboardingConnectionForm({
         <label className="block text-sm font-medium text-gray-300 mb-1">Workspace Name</label>
         <input
           type="text"
-          value={formData.workspace_name}
-          onChange={e => setFormData({ ...formData, workspace_name: e.target.value })}
+          value={formData.name}
+          onChange={e => setFormData({ ...formData, name: e.target.value })}
           placeholder="e.g., Production Workspace"
-          className={`w-full px-4 py-2.5 rounded-lg bg-slate-700 border text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors ${errors.workspace_name ? 'border-red-500' : 'border-slate-600'}`}
+          className={`w-full px-4 py-2.5 rounded-lg bg-slate-700 border text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors ${errors.name ? 'border-red-500' : 'border-slate-600'}`}
         />
-        {errors.workspace_name && <p className="mt-1 text-xs text-red-400">{errors.workspace_name}</p>}
+        {errors.name && <p className="mt-1 text-xs text-red-400">{errors.name}</p>}
       </div>
       <div>
         <label className="block text-sm font-medium text-gray-300 mb-1">OpenMetadata URL</label>
         <input
           type="url"
-          value={formData.openmetadata_url}
-          onChange={e => setFormData({ ...formData, openmetadata_url: e.target.value })}
+          value={formData.openmetadata_host}
+          onChange={e => setFormData({ ...formData, openmetadata_host: e.target.value })}
           placeholder="https://openmetadata.example.com"
-          className={`w-full px-4 py-2.5 rounded-lg bg-slate-700 border text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors ${errors.openmetadata_url ? 'border-red-500' : 'border-slate-600'}`}
+          className={`w-full px-4 py-2.5 rounded-lg bg-slate-700 border text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors ${errors.openmetadata_host ? 'border-red-500' : 'border-slate-600'}`}
         />
-        {errors.openmetadata_url && <p className="mt-1 text-xs text-red-400">{errors.openmetadata_url}</p>}
+        {errors.openmetadata_host && <p className="mt-1 text-xs text-red-400">{errors.openmetadata_host}</p>}
       </div>
       <div>
         <label className="block text-sm font-medium text-gray-300 mb-1">OpenMetadata Access Token</label>
@@ -230,7 +230,7 @@ export default function PipelineAutopsy() {
     setInputMessage('');
     setQuerying(true);
     try {
-      const data = await chatApi.sendQuery(currentSession, inputMessage);
+      const data = await chatApi.sendQuery(currentSession, inputMessage, currentConnection.id);
       if (data) {
         const r = data as unknown as Record<string, unknown>;
         setMessages(prev => [...prev, {
@@ -323,7 +323,7 @@ export default function PipelineAutopsy() {
       <div className={`${sidebarOpen ? 'w-64' : 'w-0'} transition-all duration-300 bg-slate-800 border-r border-slate-700 flex flex-col overflow-hidden`}>
         <div className="p-4 border-b border-slate-700">
           <h2 className="font-semibold text-sm truncate">{user?.email}</h2>
-          <p className="text-xs text-gray-400 mt-1">{currentConnection.workspace_name}</p>
+          <p className="text-xs text-gray-400 mt-1">{currentConnection.name}</p>
         </div>
         <button
           onClick={createNewSession}

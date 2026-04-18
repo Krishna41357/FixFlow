@@ -23,8 +23,8 @@ export default function ConnectionManager({
   const [isCreating, setIsCreating] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
   const [formData, setFormData] = useState({
-    workspace_name: '',
-    openmetadata_url: '',
+    name: '',
+    openmetadata_host: '',
     openmetadata_token: '',
     github_repo: '',
   });
@@ -51,14 +51,14 @@ export default function ConnectionManager({
   const validateForm = () => {
     const errors: Record<string, string> = {};
 
-    if (!formData.workspace_name.trim()) {
-      errors.workspace_name = 'Workspace name is required';
+    if (!formData.name.trim()) {
+      errors.name = 'Workspace name is required';
     }
 
-    if (!formData.openmetadata_url.trim()) {
-      errors.openmetadata_url = 'OpenMetadata URL is required';
-    } else if (!isValidUrl(formData.openmetadata_url)) {
-      errors.openmetadata_url = 'Invalid URL format';
+    if (!formData.openmetadata_host.trim()) {
+      errors.openmetadata_host = 'OpenMetadata URL is required';
+    } else if (!isValidUrl(formData.openmetadata_host)) {
+      errors.openmetadata_host = 'Invalid URL format';
     }
 
     if (!formData.openmetadata_token.trim()) {
@@ -88,8 +88,8 @@ export default function ConnectionManager({
     setSuccessMessage('');
 
     const result = await api.createConnection({
-      workspace_name: formData.workspace_name,
-      openmetadata_url: formData.openmetadata_url,
+      name: formData.name,
+      openmetadata_host: formData.openmetadata_host,
       openmetadata_token: formData.openmetadata_token,
       github_repo: formData.github_repo || null,
     });
@@ -99,8 +99,8 @@ export default function ConnectionManager({
     if (result) {
       setSuccessMessage('Connection created successfully!');
       setFormData({
-        workspace_name: '',
-        openmetadata_url: '',
+        name: '',
+        openmetadata_host: '',
         openmetadata_token: '',
         github_repo: '',
       });
@@ -169,7 +169,7 @@ export default function ConnectionManager({
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <h4 className="font-medium text-white">
-                            {connection.workspace_name}
+                            {connection.name}
                           </h4>
                           {connection.is_active && (
                             <span className="px-2 py-1 bg-green-600/20 text-green-400 text-xs rounded-full flex items-center gap-1">
@@ -178,7 +178,7 @@ export default function ConnectionManager({
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-gray-400 mt-1">{connection.openmetadata_url}</p>
+                        <p className="text-sm text-gray-400 mt-1">{connection.openmetadata_host}</p>
                         {connection.github_repo && (
                           <p className="text-sm text-gray-500 mt-1">
                             GitHub: {connection.github_repo}
@@ -228,17 +228,17 @@ export default function ConnectionManager({
                 </label>
                 <input
                   type="text"
-                  value={formData.workspace_name}
+                  value={formData.name}
                   onChange={(e) =>
-                    setFormData({ ...formData, workspace_name: e.target.value })
+                    setFormData({ ...formData, name: e.target.value })
                   }
                   placeholder="e.g., Production MetaData"
                   className="w-full pa-input"
                 />
-                {validationErrors.workspace_name && (
+                {validationErrors.name && (
                   <p className="mt-1 text-sm text-red-400 flex items-center gap-1">
                     <AlertCircle className="w-4 h-4" />
-                    {validationErrors.workspace_name}
+                    {validationErrors.name}
                   </p>
                 )}
               </div>
@@ -250,17 +250,17 @@ export default function ConnectionManager({
                 </label>
                 <input
                   type="url"
-                  value={formData.openmetadata_url}
+                  value={formData.openmetadata_host}
                   onChange={(e) =>
-                    setFormData({ ...formData, openmetadata_url: e.target.value })
+                    setFormData({ ...formData, openmetadata_host: e.target.value })
                   }
                   placeholder="https://openmetadata.example.com"
                   className="w-full pa-input"
                 />
-                {validationErrors.openmetadata_url && (
+                {validationErrors.openmetadata_host && (
                   <p className="mt-1 text-sm text-red-400 flex items-center gap-1">
                     <AlertCircle className="w-4 h-4" />
-                    {validationErrors.openmetadata_url}
+                    {validationErrors.openmetadata_host}
                   </p>
                 )}
               </div>

@@ -1,4 +1,3 @@
-version: '3.9'
 
 services:
   # ===== MONGODB =====
@@ -31,8 +30,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-      openmetadata-server:
-        condition: service_healthy
+      # openmetadata-server:
+      #   condition: service_healthy
     ports:
       - "8000:8000"
     env_file:
@@ -158,11 +157,11 @@ services:
       openmetadata-migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8585/api/v1/system/status"]
+      test: ["CMD-SHELL", "curl", "-f", "http://localhost:8585/api/v1/system/status || exit 1"]
       interval: 30s
       timeout: 15s
-      retries: 10
-      start_period: 60s        # OpenMetadata takes ~2 mins to boot
+      retries: 20
+      start_period: 180s        # OpenMetadata takes ~2 mins to boot
     networks:
       - pipeline_autopsy_network
     restart: unless-stopped

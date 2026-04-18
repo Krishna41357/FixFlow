@@ -79,13 +79,15 @@ async def send_query(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     investigation_result = None
-    if session.investigation_id:
+    investigation = None
+    investigation_id = getattr(session, 'investigation_id', None)
+    if investigation_id:
         investigation = investigation_controller.get_investigation(
-            investigation_id=session.investigation_id,
+            investigation_id=investigation_id,
             user_id=current_user.user_id
         )
-        if investigation and investigation.root_cause:
-            investigation_result = investigation.root_cause.model_dump()
+    if investigation and investigation.root_cause:
+        investigation_result = investigation.root_cause.model_dump()
 
     response = chat_controller.handle_query(
         session_id=session_id,

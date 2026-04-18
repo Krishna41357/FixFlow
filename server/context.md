@@ -2739,3 +2739,4 @@ Add this table to the Implementation Status Summary:
 
 Investigation pipeline correctly reaches FAILED when OpenMetadata is not running —
 this is expected behavior. Will reach COMPLETED once real OpenMetadata is connected.
+

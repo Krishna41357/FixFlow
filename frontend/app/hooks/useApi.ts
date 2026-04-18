@@ -125,12 +125,15 @@ export function useChatApi() {
   const api = useApi();
 
   const sendQuery = useCallback(
-    async (chatId: string, query: string) => {
-      const response = await api.post(`/api/v1/chats/${chatId}/query`, { query });
-      return response;
-    },
-    [api]
-  );
+  async (chatId: string, query: string, connectionId: string) => {
+    const response = await api.post(`/api/v1/chats/${chatId}/query`, { 
+      message: query,
+      connection_id: connectionId
+    });
+    return response;
+  },
+  [api]
+);
 
   const createChat = useCallback(
     async (title: string, connectionId: string) => {

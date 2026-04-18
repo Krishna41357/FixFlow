@@ -48,11 +48,11 @@ class ChatSessionInDB(MongoBase):
 
 
 class ChatSessionResponse(BaseModel):
-    """Full session returned to the chat UI."""
     id: str
     title: str
     messages: List[ChatMessage]
     investigation: Optional[InvestigationResponse] = None
+    investigation_id: Optional[str] = None    # ← add this
     created_at: str
     updated_at: str
 
@@ -86,14 +86,7 @@ class ChatQueryRequest(BaseModel):
 
 
 class ChatQueryResponse(BaseModel):
-    """
-    What the backend returns after processing a query.
-    The frontend renders this — investigation drives the lineage panel,
-    assistant_message drives the chat panel.
-    """
     session_id: str
-    assistant_message: ChatMessage
-    # Populated on the first message (investigation triggered)
-    investigation: Optional[InvestigationResponse] = None
-    # True if this was a follow-up question answered without re-traversing
+    message: str
     is_followup: bool = False
+    investigation_id: Optional[str] = None

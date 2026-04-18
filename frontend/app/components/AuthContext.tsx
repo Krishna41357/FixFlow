@@ -14,15 +14,14 @@ type User = {
 
 type Connection = {
   id: string;
-  workspace_name: string;
-  openmetadata_url: string;
+  name: string;
+  openmetadata_host: string;
   github_repo?: string;
   github_installation_id?: string;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
   is_active: boolean;
 };
-
 type AuthContextType = {
   user: User | null;
   token: string | null;

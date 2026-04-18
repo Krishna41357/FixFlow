@@ -85,13 +85,11 @@ export type User = {
 export type Connection = {
   id: string;
   user_id: string;
-  workspace_name: string;
-  openmetadata_url: string;
-  openmetadata_token: string;
+  name: string;
+  openmetadata_host: string;
   github_repo?: string;
   is_active: boolean;
   created_at: string;
-  updated_at: string;
 };
 
 /**

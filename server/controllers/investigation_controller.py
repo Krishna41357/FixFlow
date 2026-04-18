@@ -224,20 +224,19 @@ Analyze this failure and return ONLY valid JSON with these exact fields:
 
 
 def call_ai_layer(ai_context: str, max_retries: int = 3) -> Optional[RootCause]:
-    """
-    Sends prompt to Claude/OpenAI.
-    Parses JSON response into RootCause.
-    Handles retries.
-    """
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
+    
     for attempt in range(max_retries):
         try:
-            if AI_MODEL.startswith("gpt"):
+            if DEFAULT_LLM_PROVIDER == "groq" or AI_MODEL.startswith("llama"):
+                response = _call_groq(ai_context, GROQ_API_KEY)
+            elif AI_MODEL.startswith("gpt"):
                 response = _call_openai(ai_context)
             else:
                 response = _call_claude(ai_context)
 
             if response:
-                # Build suggested fixes
                 suggested_fixes = [
                     SuggestedFix(
                         description=f.get("description", ""),
@@ -268,6 +267,33 @@ def call_ai_layer(ai_context: str, max_retries: int = 3) -> Optional[RootCause]:
     print(f"ERROR call_ai_layer: Failed after {max_retries} attempts")
     return None
 
+
+def _call_groq(prompt: str, groq_api_key: str) -> Optional[dict]:
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {groq_api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": AI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a data pipeline expert. Always respond with valid JSON only, no markdown."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3
+        }
+        response = requests.post(url, json=data, headers=headers, timeout=60)
+        if response.status_code == 200:
+            content = response.json()["choices"][0]["message"]["content"]
+            content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            return json.loads(content)
+        else:
+            print(f"ERROR _call_groq: Status {response.status_code} — {response.text}")
+            return None
+    except Exception as e:
+        print(f"ERROR _call_groq: {e}")
+        return None
 
 def _call_openai(prompt: str) -> Optional[dict]:
     """Call OpenAI API."""
