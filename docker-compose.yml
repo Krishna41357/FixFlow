@@ -53,7 +53,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-demo}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-sk-ant-demo}
       DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-groq}  # ✅ groq since that key looks real
-      AI_MODEL: llama3-70b-8192
+      AI_MODEL: llama-3.3-70b-versatile
 
       # GitHub
       GITHUB_APP_ID: ${GITHUB_APP_ID:-123456}

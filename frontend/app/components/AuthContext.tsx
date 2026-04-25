@@ -68,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (response.ok) {
         const userData = await response.json();
         setUser(userData);
+        await fetchConnections(authToken);
       } else {
         localStorage.removeItem('auth_token');
         setToken(null);
@@ -161,27 +162,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchConnections = async (authToken?: string) => {
-    const tokenToUse = authToken || token;
-    if (!tokenToUse) return;
-    
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/connections`, {
-        headers: {
-          'Authorization': `Bearer ${tokenToUse}`,
-        },
-      });
+  const tokenToUse = authToken || token;
+  if (!tokenToUse) return;
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/connections`, {
+      headers: { 'Authorization': `Bearer ${tokenToUse}` },
+    });
 
-      if (response.ok) {
-        const data = await response.json();
-        setConnections(Array.isArray(data) ? data : []);
-        if (data.length > 0 && !currentConnection) {
-          setCurrentConnection(data[0]);
-        }
+    if (response.ok) {
+      const data = await response.json();
+      const connList = Array.isArray(data) ? data : [];
+      setConnections(connList);
+      if (connList.length > 0) {
+        setCurrentConnection(prev => prev ?? connList[0]);
       }
-    } catch (error) {
-      console.error('Error fetching connections:', error);
     }
-  };
+  } catch (error) {
+    console.error('Error fetching connections:', error);
+  }
+};
 
   const createConnection = async (data: Partial<Connection>): Promise<Connection> => {
     if (!token) throw new Error('Not authenticated');

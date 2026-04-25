@@ -18,18 +18,18 @@ type Investigation = {
   id: string;
   status: string;
   root_cause?: {
-    root_cause: string;
-    suggested_fix: string;
+    one_line_summary: string;
+    detailed_explanation: string;
+    suggested_fixes: Array<{description: string; code_snippet?: string}>;
     confidence: number;
   };
   lineage_subgraph?: {
     nodes: Array<{
-      id: string;
-      name: string;
+      fqn: string;
+      display_name: string;
       is_break_point: boolean;
-      status: string;
     }>;
-    edges: Array<{ from: string; to: string }>;
+    edges: Array<{ from_fqn: string; to_fqn: string }>;
   };
 };
 
@@ -194,6 +194,7 @@ export default function PipelineAutopsy() {
   const [assetFqn, setAssetFqn] = useState('');
   const [showConnectionManager, setShowConnectionManager] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -202,6 +203,7 @@ export default function PipelineAutopsy() {
   useEffect(() => {
     if (token && user) fetchSessions();
   }, [token, user]);
+
 
   const fetchSessions = useCallback(async () => {
     const data = await chatApi.get('/api/v1/chats');
@@ -223,39 +225,89 @@ export default function PipelineAutopsy() {
     }
   };
 
+    const pollInvestigationStatus = useCallback((sessionId: string, investigationId: string, attempts = 0) => {
+    if (attempts >= 60) return; // 2 min max
+
+    pollingRef.current = setTimeout(async () => {
+      try {
+        const data = await chatApi.get(`/api/v1/chats/${sessionId}/investigation-status`);
+        if (data) {
+          const status = data as unknown as Record<string, unknown>;
+          setCurrentInvestigation(prev => ({
+            id: investigationId,
+            status: status.status as string,
+            root_cause: (status.root_cause as Investigation['root_cause']) || prev?.root_cause,
+            lineage_subgraph: prev?.lineage_subgraph,
+          }));
+
+          if (status.status !== 'COMPLETED' && status.status !== 'FAILED') {
+            pollInvestigationStatus(sessionId, investigationId, attempts + 1);
+          } else if (status.status === 'COMPLETED') {
+            // Fetch full investigation to get lineage
+            const inv = await investigationApi.getInvestigation(investigationId);
+            if (inv) setCurrentInvestigation(inv as unknown as Investigation);
+          }
+        }
+      } catch (error) {
+        console.error('Polling error:', error);
+      }
+    }, 2000);
+  }, [chatApi, investigationApi]);
+  
+
   const sendQuery = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputMessage.trim() || !currentSession || !currentConnection) return;
+    
+    console.log('sendQuery called', { inputMessage, currentSession, currentConnection });
+    if (!inputMessage.trim() || !currentSession || !currentConnection){ 
+      console.log('BLOCKED', { hasInput: !!inputMessage.trim(), hasSession: !!currentSession, hasConnection: !!currentConnection });
+      return;
+    }
     setMessages(prev => [...prev, { role: 'user', content: inputMessage }]);
     setInputMessage('');
     setQuerying(true);
+    
+    console.log('About to call chatApi.sendQuery');
     try {
-      const data = await chatApi.sendQuery(currentSession, inputMessage, currentConnection.id);
+      console.log('Sending query to session:', currentSession, 'connection:', currentConnection.id);
+      const data = await chatApi.sendQuery(currentSession, inputMessage, currentConnection.id, assetFqn);
+      console.log('Response:', data);
       if (data) {
         const r = data as unknown as Record<string, unknown>;
         setMessages(prev => [...prev, {
           role: 'assistant',
-          content: (r.response as string) || (r.content as string) || 'Investigation in progress...',
+          content: (r.message as string) || (r.response as string) || (r.content as string) || 'Investigation in progress...',
           investigation_id: r.investigation_id as string | undefined,
           timestamp: new Date().toISOString(),
         }]);
-        if (r.investigation_id) fetchInvestigation(r.investigation_id as string);
+        if (r.investigation_id) {
+          const invId = r.investigation_id as string;
+          // Set initial pending state
+          setCurrentInvestigation({
+            id: invId,
+            status: 'PENDING',
+          });
+          // Start polling
+          if (pollingRef.current) clearTimeout(pollingRef.current);
+          pollInvestigationStatus(currentSession, invId);
+        }
       }
-    } catch {
+    } catch(err) {
+      console.error('sendQuery error:', err);
       setMessages(prev => [...prev, { role: 'assistant', content: 'Error processing query. Please try again.' }]);
     } finally {
       setQuerying(false);
     }
   };
 
-  const fetchInvestigation = async (id: string) => {
-    try {
-      const data = await investigationApi.getInvestigation(id);
-      if (data) setCurrentInvestigation(data as unknown as Investigation);
-    } catch (error) {
-      console.error('Error fetching investigation:', error);
-    }
-  };
+  // const fetchInvestigation = async (id: string) => {
+  //   try {
+  //     const data = await investigationApi.getInvestigation(id);
+  //     if (data) setCurrentInvestigation(data as unknown as Investigation);
+  //   } catch (error) {
+  //     console.error('Error fetching investigation:', error);
+  //   }
+  // };
 
   // ── No connection → onboarding page ────────────────────────────────────────
   if (!currentConnection) {
@@ -443,7 +495,7 @@ export default function PipelineAutopsy() {
                   <div>
                     <h3 className="font-semibold mb-2">Root Cause</h3>
                     <div className="bg-slate-700/50 rounded p-3">
-                      <p className="text-sm text-gray-300 mb-3">{currentInvestigation.root_cause.root_cause}</p>
+                      <p className="text-sm text-gray-300 mb-3">{currentInvestigation.root_cause.one_line_summary}</p>
                       <div className="flex items-center gap-2 mb-3">
                         <span className="text-xs text-gray-400">Confidence:</span>
                         <div className="flex-1 h-2 bg-slate-600 rounded">
@@ -453,7 +505,7 @@ export default function PipelineAutopsy() {
                       </div>
                       <div className="border-t border-slate-600 pt-3">
                         <h4 className="text-xs font-semibold text-gray-400 mb-2">SUGGESTED FIX</h4>
-                        <p className="text-xs text-gray-300">{currentInvestigation.root_cause.suggested_fix}</p>
+                        <p className="text-xs text-gray-300">{currentInvestigation.root_cause.suggested_fixes?.[0]?.description}</p>
                       </div>
                     </div>
                   </div>
@@ -463,14 +515,10 @@ export default function PipelineAutopsy() {
                     <h3 className="font-semibold mb-2">Lineage ({currentInvestigation.lineage_subgraph.nodes.length} nodes)</h3>
                     <div className="space-y-2">
                       {currentInvestigation.lineage_subgraph.nodes.map(node => (
-                        <div key={node.id} className="bg-slate-700/50 rounded p-2">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${node.is_break_point ? 'bg-red-500' : node.status === 'FAILING' ? 'bg-orange-500' : node.status === 'AFFECTED' ? 'bg-yellow-500' : 'bg-gray-400'}`} />
-                            <span className="text-sm font-medium truncate">{node.name}</span>
-                          </div>
-                          {node.is_break_point && <p className="text-xs text-red-400 mt-1 ml-4">Breaking Change</p>}
+                        <div key={node.fqn}>
+                        <span className="text-sm font-medium truncate">{node.display_name}</span>
                         </div>
-                      ))}
+                    ))}
                     </div>
                   </div>
                 )}

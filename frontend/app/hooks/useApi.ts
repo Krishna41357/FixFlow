@@ -124,11 +124,12 @@ export function useApi<T = unknown>() {
 export function useChatApi() {
   const api = useApi();
 
-  const sendQuery = useCallback(
-  async (chatId: string, query: string, connectionId: string) => {
+const sendQuery = useCallback(
+  async (chatId: string, query: string, connectionId: string, assetFqn?: string) => {
     const response = await api.post(`/api/v1/chats/${chatId}/query`, { 
       message: query,
-      connection_id: connectionId
+      connection_id: connectionId,
+      asset_fqn: assetFqn || query
     });
     return response;
   },

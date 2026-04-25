@@ -36,7 +36,8 @@ def create_investigation(
     user_id: str,
     connection_id: str,
     event_id: str,
-    failure_message: str
+    failure_message: str,
+    asset_fqn: Optional[str] = None
 ) -> Optional[str]:
     """
     Creates an investigation document with status=PENDING.
@@ -54,7 +55,7 @@ def create_investigation(
             "event_id": str(event_id),
             "status": InvestigationStatus.PENDING,
             "failure_message": failure_message,
-            "failing_asset_fqn": failure_message.split(":")[0].strip(),
+            "failing_asset_fqn": asset_fqn or failure_message.split(":")[0].strip(),
             "event_type": "manual",
             "lineage_subgraph": None,
             "root_cause": None,
@@ -123,10 +124,10 @@ def run_investigation(
         update_investigation_status(investigation_id, InvestigationStatus.CONTEXT_BUILDING)
 
         lineage_subgraph = LineageSubgraph(
+            failing_asset_fqn=asset_fqn,
             nodes=nodes,
             edges=[],
-            total_nodes=len(nodes),
-            break_point_node=next((n.id for n in nodes if n.is_break_point), None)
+            traversal_depth=len(nodes)
         )
 
         ai_context = build_ai_context(lineage_subgraph, investigation.get("failure_message", ""))
@@ -174,15 +175,11 @@ def run_investigation(
 
 
 def build_ai_context(lineage_subgraph: LineageSubgraph, failure_message: str) -> str:
-    """
-    Takes LineageSubgraph + failure message → formats the structured prompt for the LLM.
-    """
     nodes_info = "\n".join([
-        f"- {node.name} ({node.type}): {node.fqn}"
+        f"- {node.display_name} ({node.asset_type}): {node.fqn}"
         + (" ← BREAK POINT" if node.is_break_point else "")
         for node in lineage_subgraph.nodes
     ])
-
     context = f"""You are a data lineage expert analyzing a data pipeline failure.
 
 FAILURE MESSAGE:
@@ -194,7 +191,7 @@ DATA LINEAGE (upstream flow):
 BREAK POINT NODE:
 {lineage_subgraph.break_point_node or "Not identified yet"}
 
-Analyze this failure and return ONLY valid JSON with these exact fields:
+Analyze this failure and return ONLY valid JSON with these EXACT fields, no variations:
 {{
     "one_line_summary": "Single sentence summary of the root cause",
     "detailed_explanation": "Full explanation of what changed and why it cascaded",
@@ -202,26 +199,28 @@ Analyze this failure and return ONLY valid JSON with these exact fields:
     "break_point_change": "Human-readable description of the exact change",
     "affected_assets": [
         {{
-            "asset_fqn": "fqn.of.asset",
-            "asset_name": "asset_name",
-            "severity": "critical|high|medium|low",
-            "impact_description": "how this asset is affected"
+            "fqn": "fully.qualified.name.of.asset",
+            "asset_type": "table",
+            "display_name": "asset_name",
+            "severity": "critical",
+            "owner_email": null
         }}
     ],
     "suggested_fixes": [
         {{
             "description": "What to do",
-            "fix_type": "rename_column|update_ref|revert_change|add_test|contact_owner",
+            "fix_type": "rename_column",
             "target_asset_fqn": "fqn.of.target",
-            "code_snippet": "SQL or YAML snippet if applicable"
+            "code_snippet": "SQL snippet if applicable"
         }}
     ],
-    "owner_to_contact": "email@example.com or null",
+    "owner_to_contact": null,
     "confidence": 0.85
-}}"""
+}}
+
+IMPORTANT: Use exactly these field names. severity must be one of: critical, high, medium, low."""
 
     return context
-
 
 def call_ai_layer(ai_context: str, max_retries: int = 3) -> Optional[RootCause]:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")

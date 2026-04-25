@@ -83,6 +83,7 @@ class ChatQueryRequest(BaseModel):
     connection_id: str
     # If continuing an existing session, provide its ID
     session_id: Optional[str] = None
+    asset_fqn: Optional[str] = None  
 
 
 class ChatQueryResponse(BaseModel):

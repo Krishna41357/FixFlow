@@ -31,9 +31,9 @@ def create_session(user_id: str, title: str = "New Session") -> Optional[str]:
     if not user_id:
         print("ERROR create_session: user_id required")
         return None
-    
+
     user_id = str(user_id)
-    
+
     try:
         session_doc = {
             "user_id": user_id,
@@ -43,10 +43,10 @@ def create_session(user_id: str, title: str = "New Session") -> Optional[str]:
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc)
         }
-        
+
         result = sessions_collection.insert_one(session_doc)
         session_id = str(result.inserted_id)
-        
+
         print(f"DEBUG create_session: Created session {session_id} for user {user_id}")
         return session_id
     except Exception as e:
@@ -58,7 +58,8 @@ def handle_query(
     session_id: str,
     user_id: str,
     query: ChatQueryRequest,
-    investigation_result: Optional[dict] = None
+    investigation_result: Optional[dict] = None,
+    investigation_id: Optional[str] = None  # NEW: pass in from route so we don't rely on stale session
 ) -> Optional[ChatQueryResponse]:
     """
     Main function. Receives ChatQueryRequest →
@@ -68,39 +69,44 @@ def handle_query(
     if not session_id or not user_id:
         print("ERROR handle_query: Missing session_id or user_id")
         return None
-    
+
     user_id = str(user_id)
     session_id = str(session_id)
-    
+
     try:
         # Append user message to session
         append_message(session_id, user_id, "user", query.message)
-        
-        # Check if this is a follow-up question
+
+        # Re-fetch session fresh from DB to get latest investigation_id
         session = sessions_collection.find_one({
             "_id": ObjectId(session_id),
             "user_id": user_id
         })
-        
+
         if not session:
             print(f"ERROR handle_query: Session {session_id} not found")
             return None
-        
-        if is_followup_question(query.message, len(session.get("messages", [])) > 1):
-            # Answer follow-up from existing investigation
+
+        # Use passed-in investigation_id first, then fall back to what's in the session
+        resolved_investigation_id = investigation_id or session.get("investigation_id")
+
+        has_history = len(session.get("messages", [])) > 1
+
+        if is_followup_question(query.message, has_history) and investigation_result:
             response_text = answer_followup(query.message, investigation_result)
+            is_followup = True
         else:
-            # Trigger new investigation
             response_text = f"Starting investigation for: {query.message}"
-        
+            is_followup = False
+
         # Append assistant response
         append_message(session_id, user_id, "assistant", response_text)
-        
+
         return ChatQueryResponse(
             session_id=session_id,
             message=response_text,
-            is_followup=is_followup_question(query.message, len(session.get("messages", [])) > 2),
-            investigation_id=session.get("investigation_id")
+            is_followup=is_followup,
+            investigation_id=resolved_investigation_id  # now always populated when investigation exists
         )
     except Exception as e:
         print(f"ERROR handle_query: {e}")
@@ -114,20 +120,20 @@ def is_followup_question(message: str, has_history: bool) -> bool:
     """
     if not has_history:
         return False
-    
+
     followup_keywords = [
         "what", "who", "when", "why", "how",
         "can you", "could you", "explain", "tell me",
         "show me", "more details", "about", "this",
         "that", "it", "from the", "of the"
     ]
-    
+
     message_lower = message.lower()
-    
+
     for keyword in followup_keywords:
         if keyword in message_lower:
             return True
-    
+
     return False
 
 
@@ -135,33 +141,42 @@ def answer_followup(message: str, investigation_result: Optional[dict]) -> str:
     """Answers from existing investigation.root_cause without re-traversing lineage."""
     if not investigation_result:
         return "No investigation data available. Please start a new query."
-    
-    root_cause = investigation_result.get("root_cause", {})
-    
-    # Simple heuristic-based answers
+
+    root_cause = investigation_result
+
     message_lower = message.lower()
-    
+
     if "fix" in message_lower or "solution" in message_lower:
+        fixes = root_cause.get("suggested_fixes", [])
+        if fixes:
+            return "\n".join([f"• {f.get('description', '')}" for f in fixes])
         return root_cause.get("suggested_fix", "Unable to determine a fix.")
-    
+
     if "cause" in message_lower or "why" in message_lower:
-        return root_cause.get("root_cause", "Unable to determine root cause.")
-    
+        return root_cause.get("detailed_explanation") or root_cause.get("one_line_summary", "Unable to determine root cause.")
+
     if "impact" in message_lower or "affected" in message_lower:
-        return root_cause.get("impact_summary", "Impact assessment not available.")
-    
+        assets = root_cause.get("affected_assets", [])
+        if assets:
+            return "\n".join([f"• {a.get('asset_name', a.get('asset_fqn', ''))} ({a.get('severity', 'unknown')}): {a.get('impact_description', '')}" for a in assets])
+        return "No affected assets identified."
+
     if "sql" in message_lower or "code" in message_lower:
-        return root_cause.get("suggested_fix", "No SQL recommendations available.")
-    
-    # Default response
-    summary = f"""**Root Cause:** {root_cause.get('root_cause', 'N/A')}
+        fixes = root_cause.get("suggested_fixes", [])
+        snippets = [f.get("code_snippet") for f in fixes if f.get("code_snippet")]
+        if snippets:
+            return "\n\n".join(snippets)
+        return "No SQL recommendations available."
 
-**Responsible Asset:** {root_cause.get('responsible_asset', 'N/A')}
+    # Default: full summary
+    summary = f"""**Summary:** {root_cause.get('one_line_summary', 'N/A')}
 
-**Suggested Fix:** {root_cause.get('suggested_fix', 'N/A')}
+**Explanation:** {root_cause.get('detailed_explanation', 'N/A')}
 
-**Impact Summary:** {root_cause.get('impact_summary', 'N/A')}"""
-    
+**Break Point:** {root_cause.get('break_point_fqn', 'N/A')} — {root_cause.get('break_point_change', '')}
+
+**Confidence:** {root_cause.get('confidence', 'N/A')}"""
+
     return summary
 
 
@@ -176,30 +191,30 @@ def append_message(
     if not session_id or not user_id:
         print("ERROR append_message: Missing session_id or user_id")
         return False
-    
+
     user_id = str(user_id)
     session_id = str(session_id)
-    
+
     try:
         message = {
             "role": role,
             "content": content,
             "timestamp": datetime.now(timezone.utc)
         }
-        
+
         update_data = {
             "$push": {"messages": message},
             "$set": {"updated_at": datetime.now(timezone.utc)}
         }
-        
+
         if investigation_id:
             update_data["$set"]["investigation_id"] = investigation_id
-        
+
         result = sessions_collection.update_one(
             {"_id": ObjectId(session_id), "user_id": user_id},
             update_data
         )
-        
+
         return result.modified_count > 0
     except Exception as e:
         print(f"ERROR append_message: {e}")
@@ -210,27 +225,30 @@ def get_session(session_id: str, user_id: str) -> Optional[ChatSessionResponse]:
     """Returns full ChatSessionResponse with messages + linked investigation."""
     if not session_id or not user_id:
         return None
-    
+
     user_id = str(user_id)
-    
+
     try:
         session = sessions_collection.find_one({
             "_id": ObjectId(session_id),
             "user_id": user_id
         })
-        
+
         if not session:
             print(f"ERROR get_session: Session {session_id} not found")
             return None
-        
+
         messages = []
         for msg in session.get("messages", []):
+            # Skip internal system messages used for linking
+            if msg.get("role") == "system":
+                continue
             messages.append(ChatMessage(
                 role=msg.get("role", "user"),
                 content=msg.get("content", ""),
                 timestamp=str(msg.get("timestamp", datetime.now(timezone.utc).isoformat()))
             ))
-        
+
         return ChatSessionResponse(
             id=str(session["_id"]),
             title=session.get("title", "New Session"),
@@ -249,25 +267,24 @@ def list_sessions(user_id: str, skip: int = 0, limit: int = 20) -> List[ChatSess
     """Returns ChatSessionListItem list for sidebar. No messages payload."""
     if not user_id:
         return []
-    
+
     user_id = str(user_id)
-    
+
     try:
         sessions = sessions_collection.find(
             {"user_id": user_id}
         ).sort("updated_at", -1).skip(skip).limit(limit)
-        
+
         result = []
         for session in sessions:
-            messages = session.get("messages", [])
+            messages = [m for m in session.get("messages", []) if m.get("role") != "system"]
             last_message = None
-            
-            # Get last user message as preview
+
             if messages:
                 user_messages = [m for m in messages if m.get("role") == "user"]
                 if user_messages:
                     last_message = (user_messages[-1].get("content") or "")[:100]
-            
+
             result.append(ChatSessionListItem(
                 id=str(session["_id"]),
                 title=session.get("title", "New Session"),
@@ -276,7 +293,7 @@ def list_sessions(user_id: str, skip: int = 0, limit: int = 20) -> List[ChatSess
                 created_at=str(session.get("created_at", datetime.now(timezone.utc).isoformat())),
                 updated_at=str(session.get("updated_at", datetime.now(timezone.utc).isoformat()))
             ))
-        
+
         return result
     except Exception as e:
         print(f"ERROR list_sessions: {e}")
@@ -284,14 +301,14 @@ def list_sessions(user_id: str, skip: int = 0, limit: int = 20) -> List[ChatSess
 
 
 def generate_title(first_message: str) -> str:
-    """Auto-titles session from first message. Same logic as generate_chat_title()."""
+    """Auto-titles session from first message."""
     if not first_message:
         return "New Session"
-    
+
     title = first_message.strip()[:50]
     if len(first_message) > 50:
         title += "..."
-    
+
     return title or "New Session"
 
 
@@ -299,9 +316,9 @@ def update_session_title(session_id: str, user_id: str, title: str) -> bool:
     """Update session title."""
     if not session_id or not user_id:
         return False
-    
+
     user_id = str(user_id)
-    
+
     try:
         result = sessions_collection.update_one(
             {"_id": ObjectId(session_id), "user_id": user_id},
@@ -312,7 +329,7 @@ def update_session_title(session_id: str, user_id: str, title: str) -> bool:
                 }
             }
         )
-        
+
         return result.modified_count > 0
     except Exception as e:
         print(f"ERROR update_session_title: {e}")
@@ -323,15 +340,15 @@ def delete_session(session_id: str, user_id: str) -> bool:
     """Delete a session."""
     if not session_id or not user_id:
         return False
-    
+
     user_id = str(user_id)
-    
+
     try:
         result = sessions_collection.delete_one({
             "_id": ObjectId(session_id),
             "user_id": user_id
         })
-        
+
         return result.deleted_count > 0
     except Exception as e:
         print(f"ERROR delete_session: {e}")

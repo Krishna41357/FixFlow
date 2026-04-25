@@ -20,26 +20,26 @@ def fetch_lineage_subgraph(
     asset_id: str,
     upstream_depth: int = 3
 ) -> Optional[Dict[str, Any]]:
-    """
-    Calls OpenMetadata GET /lineage/table/{id}?upstreamDepth=3.
-    Returns raw API response.
-    """
     try:
-        endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/lineage/table/{asset_id}?upstreamDepth={upstream_depth}"
-        headers = {"Authorization": f"Bearer {openmetadata_token}"}
+        # Use FQN-based endpoint if asset_id looks like a FQN (contains dots)
+        if '.' in asset_id:
+            endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/lineage/getLineage?fqn={asset_id}&type=table&upstreamDepth={upstream_depth}&downstreamDepth=1"
+        else:
+            endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/lineage/table/{asset_id}?upstreamDepth={upstream_depth}"
         
+        headers = {"Authorization": f"Bearer {openmetadata_token}"}
+        print(f"DEBUG fetch_lineage_subgraph: Calling {endpoint}")
         response = requests.get(endpoint, headers=headers, timeout=OPENMETADATA_API_TIMEOUT)
         
         if response.status_code == 200:
             print(f"DEBUG fetch_lineage_subgraph: Successfully fetched lineage for {asset_id}")
             return response.json()
         else:
-            print(f"ERROR fetch_lineage_subgraph: Status {response.status_code}")
+            print(f"ERROR fetch_lineage_subgraph: Status {response.status_code} - {response.text[:200]}")
             return None
     except Exception as e:
         print(f"ERROR fetch_lineage_subgraph: {e}")
         return None
-
 
 def traverse_upstream(
     openmetadata_url: str,
@@ -47,51 +47,46 @@ def traverse_upstream(
     start_asset_id: str,
     max_depth: int = 3
 ) -> List[LineageNode]:
-    """
-    Walks nodes from failing asset upward.
-    Stops when it finds a schema mismatch or hits max depth.
-    """
     nodes = []
     visited = set()
     
     def recursive_traverse(asset_id: str, depth: int) -> None:
         if depth > max_depth or asset_id in visited:
             return
-        
         visited.add(asset_id)
         
-        # Fetch lineage for this node
         lineage_data = fetch_lineage_subgraph(
-            openmetadata_url,
-            openmetadata_token,
-            asset_id,
-            upstream_depth=1
+            openmetadata_url, openmetadata_token, asset_id, upstream_depth=1
         )
         
         if not lineage_data:
             return
         
-        # Create LineageNode
+        entity = lineage_data.get("entity", {})
+        fqn = entity.get("fullyQualifiedName", asset_id)
+        name = entity.get("name", asset_id)
+        service = fqn.split(".")[0] if "." in fqn else "unknown"
+        
+        from models.base import AssetType
         node = LineageNode(
-            id=asset_id,
-            name=lineage_data.get("entity", {}).get("name", "Unknown"),
-            fqn=lineage_data.get("entity", {}).get("fullyQualifiedName", "Unknown"),
-            type=lineage_data.get("entity", {}).get("entityType", "table"),
-            schema=lineage_data.get("entity", {}).get("columns", []),
-            is_break_point=False
+            fqn=fqn,
+            display_name=name,
+            asset_type=AssetType.TABLE,
+            service_name=service,
+            is_break_point=False,
+            depth_from_failure=depth,
+            raw_metadata=entity
         )
         nodes.append(node)
         
-        # Traverse upstream nodes
         upstream_edges = lineage_data.get("upstreamEdges", [])
         for edge in upstream_edges:
-            upstream_node_id = edge.get("source", {}).get("id")
-            if upstream_node_id:
+            upstream_node_id = edge.get("fromEntity", {}).get("fqn") or edge.get("source", {}).get("id")
+            if upstream_node_id and upstream_node_id not in visited:
                 recursive_traverse(upstream_node_id, depth + 1)
     
     recursive_traverse(start_asset_id, 0)
     return nodes
-
 
 def fetch_schema_diff(
     openmetadata_url: str,
