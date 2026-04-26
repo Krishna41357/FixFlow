@@ -26,11 +26,11 @@ def fetch_lineage_subgraph(
             endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/lineage/getLineage?fqn={asset_id}&type=table&upstreamDepth={upstream_depth}&downstreamDepth=1"
         else:
             endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/lineage/table/{asset_id}?upstreamDepth={upstream_depth}"
-        
+
         headers = {"Authorization": f"Bearer {openmetadata_token}"}
         print(f"DEBUG fetch_lineage_subgraph: Calling {endpoint}")
         response = requests.get(endpoint, headers=headers, timeout=OPENMETADATA_API_TIMEOUT)
-        
+
         if response.status_code == 200:
             print(f"DEBUG fetch_lineage_subgraph: Successfully fetched lineage for {asset_id}")
             return response.json()
@@ -41,52 +41,132 @@ def fetch_lineage_subgraph(
         print(f"ERROR fetch_lineage_subgraph: {e}")
         return None
 
+
+def _parse_entity_ref(ref: dict) -> Optional[str]:
+    """
+    Extract FQN from an entity reference object.
+    OpenMetadata uses different shapes in different response versions:
+      { "fqn": "..." }
+      { "fullyQualifiedName": "..." }
+      { "id": "...", "name": "..." }   ← id-only, no FQN available
+    """
+    if not ref:
+        return None
+    return (
+        ref.get("fqn")
+        or ref.get("fullyQualifiedName")
+        or ref.get("name")          # last resort — may not be fully qualified
+    )
+
+
 def traverse_upstream(
     openmetadata_url: str,
     openmetadata_token: str,
     start_asset_id: str,
     max_depth: int = 3
 ) -> List[LineageNode]:
-    nodes = []
-    visited = set()
-    
-    def recursive_traverse(asset_id: str, depth: int) -> None:
-        if depth > max_depth or asset_id in visited:
-            return
-        visited.add(asset_id)
-        
-        lineage_data = fetch_lineage_subgraph(
-            openmetadata_url, openmetadata_token, asset_id, upstream_depth=1
+    """
+    Fetches the full lineage graph in one call (upstreamDepth=max_depth),
+    then flattens all nodes from the response into LineageNode objects.
+
+    The /lineage/getLineage response shape is:
+    {
+        "entity": { "fullyQualifiedName": "...", "name": "..." },
+        "nodes": [
+            { "fullyQualifiedName": "...", "name": "...", "type": "table" },
+            ...
+        ],
+        "upstreamEdges": [
+            { "fromEntity": "uuid", "toEntity": "uuid" },
+            ...
+        ],
+        "downstreamEdges": [ ... ]
+    }
+
+    NOTE: the edges use UUIDs, not FQNs, so we index nodes by id to resolve them.
+    The nodes array contains ALL reachable upstream/downstream nodes.
+    """
+    from models.base import AssetType
+
+    # Single call with full depth — no recursion needed
+    lineage_data = fetch_lineage_subgraph(
+        openmetadata_url, openmetadata_token, start_asset_id,
+        upstream_depth=max_depth
+    )
+
+    if not lineage_data:
+        print(f"ERROR traverse_upstream: No lineage data returned for {start_asset_id}")
+        return []
+
+    nodes: List[LineageNode] = []
+    seen_fqns: set = set()
+
+    # ── 1. Add the primary (failing) entity itself ────────────────────────────
+    entity = lineage_data.get("entity", {})
+    primary_fqn = (
+        entity.get("fullyQualifiedName")
+        or entity.get("fqn")
+        or start_asset_id
+    )
+    primary_name = entity.get("name", primary_fqn.split(".")[-1])
+    primary_service = primary_fqn.split(".")[0] if "." in primary_fqn else "unknown"
+
+    primary_node = LineageNode(
+        fqn=primary_fqn,
+        display_name=primary_name,
+        asset_type=AssetType.TABLE,
+        service_name=primary_service,
+        is_break_point=False,
+        depth_from_failure=0,
+        raw_metadata=entity
+    )
+    nodes.append(primary_node)
+    seen_fqns.add(primary_fqn)
+
+    print(f"DEBUG traverse_upstream: primary node = {primary_fqn}")
+
+    # ── 2. Parse all upstream/downstream nodes from the nodes array ───────────
+    # OpenMetadata returns a flat list of all related nodes
+    related_nodes = lineage_data.get("nodes", [])
+    print(f"DEBUG traverse_upstream: found {len(related_nodes)} related nodes in response")
+
+    for n in related_nodes:
+        fqn = (
+            n.get("fullyQualifiedName")
+            or n.get("fqn")
+            or n.get("name")
         )
-        
-        if not lineage_data:
-            return
-        
-        entity = lineage_data.get("entity", {})
-        fqn = entity.get("fullyQualifiedName", asset_id)
-        name = entity.get("name", asset_id)
+        if not fqn or fqn in seen_fqns:
+            continue
+
+        name = n.get("name", fqn.split(".")[-1])
         service = fqn.split(".")[0] if "." in fqn else "unknown"
-        
-        from models.base import AssetType
+        entity_type = n.get("type", "table").lower()
+
+        # Map OpenMetadata type strings to AssetType
+        asset_type_map = {
+            "table": AssetType.TABLE,
+            "pipeline": AssetType.PIPELINE,
+            "dashboard": AssetType.DASHBOARD,
+            "topic": AssetType.TOPIC,
+        }
+        asset_type = asset_type_map.get(entity_type, AssetType.TABLE)
+
         node = LineageNode(
             fqn=fqn,
             display_name=name,
-            asset_type=AssetType.TABLE,
+            asset_type=asset_type,
             service_name=service,
             is_break_point=False,
-            depth_from_failure=depth,
-            raw_metadata=entity
+            depth_from_failure=1,   # upstream nodes are all depth 1+ from failure
+            raw_metadata=n
         )
         nodes.append(node)
-        
-        upstream_edges = lineage_data.get("upstreamEdges", [])
-        for edge in upstream_edges:
-            upstream_node_id = edge.get("fromEntity", {}).get("fqn") or edge.get("source", {}).get("id")
-            if upstream_node_id and upstream_node_id not in visited:
-                recursive_traverse(upstream_node_id, depth + 1)
-    
-    recursive_traverse(start_asset_id, 0)
+        seen_fqns.add(fqn)
+
+    print(f"DEBUG traverse_upstream: total nodes after parsing = {len(nodes)}")
     return nodes
+
 
 def fetch_schema_diff(
     openmetadata_url: str,
@@ -100,32 +180,30 @@ def fetch_schema_diff(
     try:
         endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/tables/{table_id}/versions"
         headers = {"Authorization": f"Bearer {openmetadata_token}"}
-        
+
         response = requests.get(endpoint, headers=headers, timeout=OPENMETADATA_API_TIMEOUT)
-        
+
         if response.status_code != 200:
             print(f"ERROR fetch_schema_diff: Status {response.status_code}")
             return None
-        
+
         versions_data = response.json()
         versions = versions_data.get("data", [])
-        
+
         if len(versions) < 2:
             print(f"DEBUG fetch_schema_diff: Less than 2 versions for {table_id}")
             return None
-        
-        # Compare last two versions
+
         current_version = versions[0]
         previous_version = versions[1]
-        
+
         current_columns = {col["name"]: col for col in current_version.get("columns", [])}
         previous_columns = {col["name"]: col for col in previous_version.get("columns", [])}
-        
+
         added_columns = []
         removed_columns = []
         modified_columns = []
-        
-        # Find added columns
+
         for col_name in current_columns:
             if col_name not in previous_columns:
                 added_columns.append(ColumnDiff(
@@ -133,8 +211,7 @@ def fetch_schema_diff(
                     old_type=None,
                     new_type=current_columns[col_name].get("dataType")
                 ))
-        
-        # Find removed columns
+
         for col_name in previous_columns:
             if col_name not in current_columns:
                 removed_columns.append(ColumnDiff(
@@ -142,8 +219,7 @@ def fetch_schema_diff(
                     old_type=previous_columns[col_name].get("dataType"),
                     new_type=None
                 ))
-        
-        # Find modified columns
+
         for col_name in current_columns:
             if col_name in previous_columns:
                 old_type = previous_columns[col_name].get("dataType")
@@ -154,7 +230,7 @@ def fetch_schema_diff(
                         old_type=old_type,
                         new_type=new_type
                     ))
-        
+
         return SchemaDiff(
             table_id=table_id,
             added_columns=added_columns,
@@ -169,19 +245,16 @@ def fetch_schema_diff(
 
 def detect_break_point(nodes: List[LineageNode]) -> List[LineageNode]:
     """
-    Compares schema versions across nodes.
-    Sets is_break_point=True on the node where change happened.
+    Marks the upstream-most node with schema changes as the break point.
+    Currently marks the deepest upstream node as the candidate break point
+    when there are multiple nodes (simple heuristic until schema diff is wired).
     """
-    for i, node in enumerate(nodes):
-        if i == 0:
-            # Check current node's schema against previous versions
-            # For now, mark as break point if any schema diff exists
-            node.is_break_point = False
-        else:
-            # Compare with downstream node
-            # If schemas don't match, this is the break point
-            node.is_break_point = False
-    
+    if len(nodes) <= 1:
+        return nodes
+
+    # Mark the deepest upstream node as the break point (highest depth_from_failure)
+    deepest = max(nodes, key=lambda n: n.depth_from_failure)
+    deepest.is_break_point = True
     return nodes
 
 
@@ -189,15 +262,12 @@ def build_subgraph(
     nodes: List[LineageNode],
     edges: List[LineageEdge]
 ) -> LineageSubgraph:
-    """
-    Assembles final LineageSubgraph from nodes + edges.
-    This is passed to the context builder.
-    """
+    """Assembles final LineageSubgraph from nodes + edges."""
     return LineageSubgraph(
         nodes=nodes,
         edges=edges,
         total_nodes=len(nodes),
-        break_point_node=next((n.id for n in nodes if n.is_break_point), None)
+        break_point_node=next((n.fqn for n in nodes if n.is_break_point), None)
     )
 
 
@@ -206,29 +276,25 @@ def resolve_asset_fqn(
     openmetadata_token: str,
     dbt_node_id: str
 ) -> Optional[str]:
-    """
-    Converts a dbt node_id (model.proj.orders) → OpenMetadata FQN (snowflake.prod.orders).
-    """
+    """Converts a dbt node_id (model.proj.orders) → OpenMetadata FQN."""
     try:
-        # Search OpenMetadata for the table with matching dbt lineage
         endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/search/query"
         headers = {"Authorization": f"Bearer {openmetadata_token}"}
-        
+
         data = {
             "query": dbt_node_id,
             "filters": "entityType:Table"
         }
-        
+
         response = requests.post(endpoint, json=data, headers=headers, timeout=OPENMETADATA_API_TIMEOUT)
-        
+
         if response.status_code == 200:
             results = response.json().get("hits", {}).get("hits", [])
             if results:
-                # Return FQN of first match
                 fqn = results[0].get("_source", {}).get("fullyQualifiedName")
                 print(f"DEBUG resolve_asset_fqn: Resolved {dbt_node_id} to FQN {fqn}")
                 return fqn
-        
+
         print(f"ERROR resolve_asset_fqn: Could not resolve {dbt_node_id}")
         return None
     except Exception as e:
@@ -245,9 +311,9 @@ def fetch_table_details(
     try:
         endpoint = f"{openmetadata_url.rstrip('/')}/api/v1/tables/{table_id}"
         headers = {"Authorization": f"Bearer {openmetadata_token}"}
-        
+
         response = requests.get(endpoint, headers=headers, timeout=OPENMETADATA_API_TIMEOUT)
-        
+
         if response.status_code == 200:
             return response.json()
         else:

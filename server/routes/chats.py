@@ -30,7 +30,17 @@ async def create_session(
     )
     if not session_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to create session")
-    return {"session_id": session_id, "user_id": current_user.user_id, "title": title, "message_count": 0}
+    # FIX: return both "id" and "session_id" — frontend reads chatData.id in createNewSession
+    return {
+        "id": session_id,
+        "session_id": session_id,
+        "user_id": current_user.user_id,
+        "title": title,
+        "message_count": 0,
+        "created_at": "",
+        "updated_at": "",
+        "connection_id": "",
+    }
 
 
 @router.get("", response_model=List[ChatSessionListItem])
@@ -99,21 +109,31 @@ async def send_query(
     # --- If no existing investigation, start a new one ---
     new_investigation_id = None
     if not existing_investigation_id:
-        # Get the user's active connection
-        connections = connection_controller.get_user_connections(current_user.user_id)
-        connection_response = connections[0] if connections else None
+        # FIX: prefer connection_id sent from the frontend in the request body
         connection = None
-        if connection_response:
-          connection = connection_controller.get_connection_by_id(
-            connection_id=connection_response.id,
-            user_id=current_user.user_id
-        )
+        connection_id_from_request = getattr(query, 'connection_id', None)
+
+        if connection_id_from_request:
+            connection = connection_controller.get_connection_by_id(
+                connection_id=connection_id_from_request,
+                user_id=current_user.user_id
+            )
+
+        if not connection:
+            # fall back to user's first active connection
+            connections = connection_controller.get_user_connections(current_user.user_id)
+            connection_response = connections[0] if connections else None
+            if connection_response:
+                connection = connection_controller.get_connection_by_id(
+                    connection_id=connection_response.id,
+                    user_id=current_user.user_id
+                )
 
         if connection:
-            # Create a manual event
+            # Create a manual event — field names match ManualQueryPayload model
             from models.events import ManualQueryPayload
             payload = ManualQueryPayload(
-                asset_name=getattr(query, 'asset_name', query.message),
+                asset_name=getattr(query, 'asset_fqn', None) or query.message,
                 question=query.message,
                 connection_id=connection.id
             )

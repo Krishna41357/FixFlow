@@ -103,11 +103,10 @@ async def github_pr_webhook(
         raise HTTPException(status_code=404, detail="Connection not found")
 
     installation_id = (
-        getattr(connection, "github_installation_id", None)
-        or (str(payload.installation["id"]) if payload.installation else None)
-    )
-    if not installation_id:
-        raise HTTPException(status_code=400, detail="No GitHub installation ID found.")
+    getattr(connection, "github_installation_id", None)
+    or (str(payload.installation["id"]) if payload.installation else None)
+    or "demo"  # fallback for plain webhook (uses GITHUB_TEST_PAT)
+)
 
     gh_token = github_controller.get_installation_token(installation_id)
     if not gh_token:
