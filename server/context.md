@@ -2740,3 +2740,148 @@ Add this table to the Implementation Status Summary:
 Investigation pipeline correctly reaches FAILED when OpenMetadata is not running —
 this is expected behavior. Will reach COMPLETED once real OpenMetadata is connected.
 
+# ============================================================
+# CONTEXT.MD — PATCH NOTES (April 26, 2026)
+# GitHub PR Bot — Full End-to-End Testing & Fixes
+# ============================================================
+
+## Summary of Work Done (April 26, 2026)
+
+### 🎯 Goal
+Complete end-to-end testing of the GitHub PR Bot — from webhook receipt
+to AI-generated comment posted on a real GitHub PR.
+
+---
+
+### ✅ Fixes Applied
+
+#### 1. `controllers/github_controller.py` — PAT Authentication
+Replaced the placeholder `get_installation_token()` stub (which always
+returned None) with a working implementation that reads `GITHUB_TEST_PAT`
+from the environment:
+```python
+def get_installation_token(installation_id: str) -> Optional[str]:
+    test_pat = os.getenv("GITHUB_TEST_PAT")
+    if test_pat:
+        return test_pat
+    return None
+```
+Added `GITHUB_TEST_PAT=ghp_...` to root `.env`.
+
+#### 2. `routes/github.py` — Background Task Never Fired
+`run_investigation()` was never called after the initial PR comment was
+posted. Fixed by adding `BackgroundTasks` to the route and calling
+`run_investigation_and_update_pr()` as a background task.
+
+#### 3. `routes/github.py` — `comment_id` UnboundLocalError
+Background task referenced `comment_id` before it was assigned.
+Fixed by reordering: post initial comment first, then start background task.
+
+#### 4. `routes/github.py` — Wrong `openmetadata_url`/`openmetadata_token` args
+`run_investigation()` requires `openmetadata_url` and `openmetadata_token`
+but they weren't being passed. Fixed by reading them from the connection object:
+```python
+openmetadata_url=connection.openmetadata_host,
+openmetadata_token=connection.openmetadata_token
+```
+
+#### 5. `routes/github.py` — `failing_asset_fqn` was PR URL
+`create_investigation()` was receiving the full PR URL as the asset FQN,
+causing OpenMetadata to return 400. Fixed by converting the SQL filename
+to dot-notation:
+```python
+primary_asset = primary_file.replace("/", ".").rstrip(".sql")
+# migrations/test_change.sql → migrations.test_change
+```
+
+#### 6. `routes/github.py` — `InvestigationResponse` is Pydantic not dict
+`get_investigation()` returns a Pydantic object, not a dict.
+Fixed by using `getattr()` instead of `.get()` throughout
+`run_investigation_and_update_pr()`.
+
+#### 7. New helper function added to `routes/github.py`
+```python
+def run_investigation_and_update_pr(
+    investigation_id, user_id, connection_id,
+    openmetadata_url, openmetadata_token,
+    gh_token, repo_owner, repo_name, pr_number, comment_id
+):
+    # Runs investigation, then updates PR comment with full AI results
+```
+This posts "analysis started" immediately, runs the full pipeline in
+background, then edits the comment with root cause + fixes + confidence.
+
+---
+
+### ✅ Infrastructure Setup
+
+#### ngrok Tunnel
+- Installed ngrok 3.38.0 (updated from 3.3.1 which was below minimum)
+- Fixed `ngrok.yml` config: version `"3"` → `"2"`, moved authtoken out of
+  `agent:` block
+- Tunnel URL format: `https://XXXX.ngrok-free.app`
+- Note: Free plan generates new URL on each restart — claim static domain
+  at dashboard.ngrok.com/domains
+
+#### GitHub Webhook
+- Configured on `Krishna41357/ks-ecommerce-schema` repo
+- Events: Pull requests
+- Secret: `demo-secret`
+- URL: `https://XXXX.ngrok-free.app/api/v1/github/webhook?connection_id=X&user_id=Y`
+
+#### GitHub PAT
+- New PAT created with `repo` + `workflow` scopes
+- Used to create test branch, commit `.sql` file, and open PR via API
+- Also used by backend to fetch PR diffs via GitHub API
+
+#### Connection Setup
+- Correct connection: `id=69edde76403f09a587aa01ba`
+  - `openmetadata_host`: `http://openmetadata-server:8585`
+  - `openmetadata_token`: real ingestion-bot JWT (exp: null)
+  - `github_repo`: `Krishna41357/ks-ecommerce-schema`
+- Correct user: `69e3c181391a5b960ae85cf7` (krishnasrivastava41359@gmail.com)
+
+---
+
+### ✅ Verified End-to-End Flow (April 26, 2026)
+POST /api/v1/github/webhook
+→ Signature verified ✅
+→ parse_pr_diff: Found 1 relevant changed files ✅
+→ create_investigation: Created ✅
+→ post_pr_comment: "Pipeline Autopsy - analysis started" ✅
+Background task fires:
+→ run_investigation: Step 1 - Traversing lineage ✅
+→ fetch_lineage_subgraph: Successfully fetched for migrations.test_change ✅
+→ run_investigation: Step 2 - Building AI context ✅
+→ run_investigation: Step 3 - Calling AI layer (Groq llama-3.3-70b) ✅
+→ run_investigation: Step 4 - Storing result ✅
+→ run_investigation: Completed in ~1350ms ✅
+→ update_pr_comment: PR comment edited with full analysis ✅
+GitHub PR comment shows:
+🔍 Pipeline Autopsy - Analysis Complete
+Root Cause: Schema change in migrations/test_change.sql...
+Affected Assets: migrations.test_change (CRITICAL)
+Suggested Fixes: Review and update schema change...
+Confidence: 85%
+
+---
+
+### ⚠️ Known Minor Issues (Non-blocking)
+
+| Issue | Impact | Status |
+|---|---|---|
+| `ERROR mark_event_processed: 'github-1' is not a valid ObjectId` | Event not stored in DB | Non-blocking, investigation still runs |
+| ngrok URL changes on restart | Must update GitHub webhook URL | Fix: claim static domain |
+| `comment_id` defaults to `"0"` if `post_pr_comment` returns None | Update skips silently | Acceptable for now |
+
+---
+
+### 📋 Correct IDs for Testing (April 26, 2026)
+
+| Field | Value |
+|---|---|
+| User (krishnasrivastava41359) | `69e3c181391a5b960ae85cf7` |
+| Connection (KS Production) | `69edde76403f09a587aa01ba` |
+| GitHub repo | `Krishna41357/ks-ecommerce-schema` |
+| Test PR | `#1` — https://github.com/Krishna41357/ks-ecommerce-schema/pull/1 |
+| Webhook secret | `demo-secret` |

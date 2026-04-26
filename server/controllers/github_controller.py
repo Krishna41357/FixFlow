@@ -186,28 +186,16 @@ def update_pr_comment(
 
 
 def get_installation_token(installation_id: str) -> Optional[str]:
-    """
-    Exchanges GitHub App private key for a short-lived installation token.
-    Required for all GitHub API calls.
-    
-    Note: This is a simplified implementation.
-    In production, use PyJWT to sign the JWT properly.
-    """
     try:
-        # This would require proper JWT signing with the private key
-        # For now, return a placeholder
-        print(f"DEBUG get_installation_token: Getting token for installation {installation_id}")
-        
-        # TODO: Implement proper GitHub App JWT signing
-        # 1. Create JWT with RS256 using GITHUB_APP_PRIVATE_KEY
-        # 2. POST to /app/installations/{installation_id}/access_tokens
-        # 3. Return access_token from response
-        
+        test_pat = os.getenv("GITHUB_TEST_PAT")
+        if test_pat:
+            print(f"DEBUG get_installation_token: Using GITHUB_TEST_PAT")
+            return test_pat
+        print("ERROR get_installation_token: GITHUB_TEST_PAT not set")
         return None
     except Exception as e:
         print(f"ERROR get_installation_token: {e}")
         return None
-
 
 def render_pr_comment(pr_analysis: PRAnalysis) -> str:
     """Renders the PR analysis into a markdown comment for GitHub."""

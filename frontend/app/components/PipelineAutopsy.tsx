@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Loader2, LogOut, Menu, Plus, Settings, AlertCircle, LineChart, Database } from 'lucide-react';
+import { Send, Loader2, LogOut, Menu, Plus, Settings, AlertCircle, LineChart, Database, Maximize2, X, ZoomIn, ZoomOut, Download, Info } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { useChatApi, useInvestigationApi, useConnectionApi } from '@/app/hooks/useApi';
-import { Chat } from '@/app/utils/api';
+import { Chat, Asset, Relationship } from '@/app/utils/api';
 import ConnectionManager from './ConnectionManager';
+import LineageVisualizer from './LineageVisualizer';
 
 type Message = {
   role: 'user' | 'assistant';
@@ -20,20 +21,16 @@ type Investigation = {
   root_cause?: {
     one_line_summary: string;
     detailed_explanation: string;
-    suggested_fixes: Array<{description: string; code_snippet?: string}>;
+    suggested_fixes: Array<{ description: string; code_snippet?: string }>;
     confidence: number;
   };
   lineage_subgraph?: {
-    nodes: Array<{
-      fqn: string;
-      display_name: string;
-      is_break_point: boolean;
-    }>;
+    nodes: Array<{ fqn: string; display_name: string; is_break_point: boolean }>;
     edges: Array<{ from_fqn: string; to_fqn: string }>;
   };
 };
 
-// ── Onboarding form (shown full-page when no connection exists) ───────────────
+// ── Onboarding form ───────────────────────────────────────────────────────────
 function OnboardingConnectionForm({
   onSuccess,
   onLogout,
@@ -163,8 +160,7 @@ function OnboardingConnectionForm({
         >
           {isSubmitting
             ? <><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</>
-            : 'Connect Workspace'
-          }
+            : 'Connect Workspace'}
         </button>
         <button
           type="button"
@@ -178,6 +174,64 @@ function OnboardingConnectionForm({
   );
 }
 
+// ── Lineage Popup Modal ───────────────────────────────────────────────────────
+function LineageModal({
+  isOpen,
+  onClose,
+  assets,
+  relationships,
+  isLoading,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  assets: Asset[];
+  relationships: Relationship[];
+  isLoading: boolean;
+}) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    if (isOpen) window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      {/* Modal */}
+      <div className="relative z-10 w-full max-w-5xl h-[80vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <LineChart className="w-5 h-5 text-red-400" />
+            <span className="font-semibold text-white">Data Lineage Graph</span>
+            {isLoading && <Loader2 className="w-4 h-4 animate-spin text-yellow-400" />}
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors text-gray-400 hover:text-white"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        {/* Visualizer fills remaining height */}
+        <div className="flex-1 min-h-0">
+          <LineageVisualizer
+            assets={assets}
+            relationships={relationships}
+            isLoading={isLoading}
+            onNodeClick={(asset) => console.log('Node clicked:', asset)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 export default function PipelineAutopsy() {
@@ -193,6 +247,7 @@ export default function PipelineAutopsy() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [assetFqn, setAssetFqn] = useState('');
   const [showConnectionManager, setShowConnectionManager] = useState(false);
+  const [showLineageModal, setShowLineageModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -204,11 +259,36 @@ export default function PipelineAutopsy() {
     if (token && user) fetchSessions();
   }, [token, user]);
 
+  useEffect(() => {
+    return () => { if (pollingRef.current) clearTimeout(pollingRef.current); };
+  }, []);
 
   const fetchSessions = useCallback(async () => {
     const data = await chatApi.get('/api/v1/chats');
     if (Array.isArray(data)) setSessions(data);
   }, [chatApi]);
+
+  const loadSession = useCallback(async (sessionId: string) => {
+    setCurrentSession(sessionId);
+    setMessages([]);
+    setCurrentInvestigation(null);
+    if (pollingRef.current) clearTimeout(pollingRef.current);
+    try {
+      const data = await chatApi.get(`/api/v1/chats/${sessionId}`);
+      if (data) {
+        const session = data as unknown as Record<string, unknown>;
+        const msgs = (session.messages as Message[]) || [];
+        setMessages(msgs.filter(m => m.role === 'user' || m.role === 'assistant'));
+        const invId = session.investigation_id as string | null;
+        if (invId) {
+          const inv = await investigationApi.getInvestigation(invId);
+          if (inv) setCurrentInvestigation(inv as unknown as Investigation);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading session:', error);
+    }
+  }, [chatApi, investigationApi]);
 
   const createNewSession = async () => {
     try {
@@ -225,9 +305,8 @@ export default function PipelineAutopsy() {
     }
   };
 
-    const pollInvestigationStatus = useCallback((sessionId: string, investigationId: string, attempts = 0) => {
-    if (attempts >= 60) return; // 2 min max
-
+  const pollInvestigationStatus = useCallback((sessionId: string, investigationId: string, attempts = 0) => {
+    if (attempts >= 60) return;
     pollingRef.current = setTimeout(async () => {
       try {
         const data = await chatApi.get(`/api/v1/chats/${sessionId}/investigation-status`);
@@ -239,11 +318,9 @@ export default function PipelineAutopsy() {
             root_cause: (status.root_cause as Investigation['root_cause']) || prev?.root_cause,
             lineage_subgraph: prev?.lineage_subgraph,
           }));
-
           if (status.status !== 'COMPLETED' && status.status !== 'FAILED') {
             pollInvestigationStatus(sessionId, investigationId, attempts + 1);
           } else if (status.status === 'COMPLETED') {
-            // Fetch full investigation to get lineage
             const inv = await investigationApi.getInvestigation(investigationId);
             if (inv) setCurrentInvestigation(inv as unknown as Investigation);
           }
@@ -253,25 +330,15 @@ export default function PipelineAutopsy() {
       }
     }, 2000);
   }, [chatApi, investigationApi]);
-  
 
   const sendQuery = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    console.log('sendQuery called', { inputMessage, currentSession, currentConnection });
-    if (!inputMessage.trim() || !currentSession || !currentConnection){ 
-      console.log('BLOCKED', { hasInput: !!inputMessage.trim(), hasSession: !!currentSession, hasConnection: !!currentConnection });
-      return;
-    }
+    if (!inputMessage.trim() || !currentSession || !currentConnection) return;
     setMessages(prev => [...prev, { role: 'user', content: inputMessage }]);
     setInputMessage('');
     setQuerying(true);
-    
-    console.log('About to call chatApi.sendQuery');
     try {
-      console.log('Sending query to session:', currentSession, 'connection:', currentConnection.id);
       const data = await chatApi.sendQuery(currentSession, inputMessage, currentConnection.id, assetFqn);
-      console.log('Response:', data);
       if (data) {
         const r = data as unknown as Record<string, unknown>;
         setMessages(prev => [...prev, {
@@ -282,17 +349,12 @@ export default function PipelineAutopsy() {
         }]);
         if (r.investigation_id) {
           const invId = r.investigation_id as string;
-          // Set initial pending state
-          setCurrentInvestigation({
-            id: invId,
-            status: 'PENDING',
-          });
-          // Start polling
+          setCurrentInvestigation({ id: invId, status: 'PENDING' });
           if (pollingRef.current) clearTimeout(pollingRef.current);
           pollInvestigationStatus(currentSession, invId);
         }
       }
-    } catch(err) {
+    } catch (err) {
       console.error('sendQuery error:', err);
       setMessages(prev => [...prev, { role: 'assistant', content: 'Error processing query. Please try again.' }]);
     } finally {
@@ -300,24 +362,43 @@ export default function PipelineAutopsy() {
     }
   };
 
-  // const fetchInvestigation = async (id: string) => {
-  //   try {
-  //     const data = await investigationApi.getInvestigation(id);
-  //     if (data) setCurrentInvestigation(data as unknown as Investigation);
-  //   } catch (error) {
-  //     console.error('Error fetching investigation:', error);
-  //   }
-  // };
+  const getLineageAssets = (): Asset[] => {
+    if (!currentInvestigation?.lineage_subgraph?.nodes) return [];
+    return currentInvestigation.lineage_subgraph.nodes.map(node => ({
+      fqn: node.fqn,
+      name: node.display_name,
+      type: 'table',
+      status: node.is_break_point ? 'breaking' : 'upstream',
+      owner: undefined,
+      description: undefined,
+    }));
+  };
 
-  // ── No connection → onboarding page ────────────────────────────────────────
+  const getLineageRelationships = (): Relationship[] => {
+    if (!currentInvestigation?.lineage_subgraph?.edges) return [];
+    return currentInvestigation.lineage_subgraph.edges.map(edge => ({
+      source_fqn: edge.from_fqn,
+      target_fqn: edge.to_fqn,
+      relationship_type: 'downstream',
+    }));
+  };
+
+  const isInvestigating =
+    currentInvestigation?.status !== 'COMPLETED' &&
+    currentInvestigation?.status !== 'FAILED' &&
+    !!currentInvestigation;
+
+  const lineageAssets = getLineageAssets();
+  const lineageRelationships = getLineageRelationships();
+
+  // ── No connection → onboarding ──────────────────────────────────────────────
   if (!currentConnection) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white flex items-center justify-center p-4 relative overflow-hidden">
+      <div className="h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white flex items-center justify-center p-4 relative overflow-hidden">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-96 h-96 bg-red-600/10 rounded-full blur-3xl" />
         </div>
-        <div className="relative z-10 w-full max-w-xl">
-          {/* Logo */}
+        <div className="relative z-10 w-full max-w-xl overflow-y-auto max-h-full py-6">
           <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-700 shadow-lg mb-4">
               <span className="text-2xl font-bold text-white">PA</span>
@@ -329,8 +410,6 @@ export default function PipelineAutopsy() {
               Connect your OpenMetadata workspace to start investigating pipeline failures
             </p>
           </div>
-
-          {/* Progress steps */}
           <div className="flex items-center justify-center gap-3 mb-8">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-green-600 flex items-center justify-center text-xs font-bold">✓</div>
@@ -347,8 +426,6 @@ export default function PipelineAutopsy() {
               <span className="text-sm text-gray-500">Start Investigating</span>
             </div>
           </div>
-
-          {/* Form card */}
           <div className="bg-slate-800/70 backdrop-blur border border-slate-700 rounded-2xl shadow-2xl p-8">
             <h2 className="text-xl font-semibold text-white mb-1">Connect to OpenMetadata</h2>
             <p className="text-gray-400 text-sm mb-6">
@@ -359,7 +436,6 @@ export default function PipelineAutopsy() {
               onLogout={logout}
             />
           </div>
-
           <p className="text-center text-xs text-gray-500 mt-6">
             🔍 AI-powered pipeline debugging for data professionals
           </p>
@@ -370,173 +446,252 @@ export default function PipelineAutopsy() {
 
   // ── Main dashboard ──────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex">
-      {/* Sidebar */}
-      <div className={`${sidebarOpen ? 'w-64' : 'w-0'} transition-all duration-300 bg-slate-800 border-r border-slate-700 flex flex-col overflow-hidden`}>
-        <div className="p-4 border-b border-slate-700">
-          <h2 className="font-semibold text-sm truncate">{user?.email}</h2>
-          <p className="text-xs text-gray-400 mt-1">{currentConnection.name}</p>
-        </div>
-        <button
-          onClick={createNewSession}
-          className="m-4 p-3 rounded-lg bg-red-600 hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+    <>
+      {/* Fixed full-screen layout */}
+      <div className="h-screen w-screen bg-slate-900 text-white flex overflow-hidden">
+
+        {/* ── Sidebar ── */}
+        <div
+          className={`${sidebarOpen ? 'w-64' : 'w-0'} flex-shrink-0 transition-all duration-300 bg-slate-800 border-r border-slate-700 flex flex-col overflow-hidden`}
         >
-          <Plus className="w-5 h-5" /><span>New Investigation</span>
-        </button>
-        <div className="flex-1 overflow-y-auto px-2">
-          {sessions.map(session => (
-            <button
-              key={session.id}
-              onClick={() => { setCurrentSession(session.id); setMessages([]); setCurrentInvestigation(null); }}
-              className={`w-full text-left p-3 rounded-lg mb-2 transition-colors ${currentSession === session.id ? 'bg-red-600' : 'bg-slate-700 hover:bg-slate-600'}`}
-            >
-              <p className="text-sm font-medium truncate">{session.title}</p>
-              <p className="text-xs text-gray-400 mt-1">{new Date(session.created_at).toLocaleDateString()}</p>
-            </button>
-          ))}
-        </div>
-        <div className="p-4 border-t border-slate-700 space-y-2">
-          <button
-            onClick={() => setShowConnectionManager(true)}
-            className="w-full p-2 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors flex items-center gap-2 text-sm"
-          >
-            <Settings className="w-4 h-4" />Manage Connections
-          </button>
-          <button
-            onClick={logout}
-            className="w-full p-2 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors flex items-center gap-2 text-sm"
-          >
-            <LogOut className="w-4 h-4" />Logout
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col">
-        <div className="bg-slate-800 border-b border-slate-700 p-4 flex items-center justify-between">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
-            <Menu className="w-6 h-6" />
-          </button>
-          <div className="flex items-center gap-2">
-            <Database className="w-6 h-6 text-red-500" />
-            <span className="font-semibold">Pipeline Autopsy</span>
+          {/* Sidebar header */}
+          <div className="p-4 border-b border-slate-700 flex-shrink-0">
+            <h2 className="font-semibold text-sm truncate">{user?.email}</h2>
+            <p className="text-xs text-gray-400 mt-1">{currentConnection.name}</p>
           </div>
-          <div className="w-6" />
+
+          {/* New investigation button */}
+          <div className="p-3 flex-shrink-0">
+            <button
+              onClick={createNewSession}
+              className="w-full p-2.5 rounded-lg bg-red-600 hover:bg-red-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+            >
+              <Plus className="w-4 h-4" /><span>New Investigation</span>
+            </button>
+          </div>
+
+          {/* Sessions list — scrollable */}
+          <div className="flex-1 overflow-y-auto px-2 pb-2 custom-scrollbar">
+            {sessions.map(session => (
+              <button
+                key={session.id}
+                onClick={() => loadSession(session.id)}
+                className={`w-full text-left p-3 rounded-lg mb-1 transition-colors ${currentSession === session.id ? 'bg-red-600' : 'bg-slate-700 hover:bg-slate-600'}`}
+              >
+                <p className="text-sm font-medium truncate">{session.title}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{new Date(session.created_at).toLocaleDateString()}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* Sidebar footer */}
+          <div className="p-3 border-t border-slate-700 space-y-1.5 flex-shrink-0">
+            <button
+              onClick={() => setShowConnectionManager(true)}
+              className="w-full p-2 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors flex items-center gap-2 text-sm"
+            >
+              <Settings className="w-4 h-4" />Manage Connections
+            </button>
+            <button
+              onClick={logout}
+              className="w-full p-2 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors flex items-center gap-2 text-sm"
+            >
+              <LogOut className="w-4 h-4" />Logout
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-hidden flex gap-4 p-4">
-          {/* Chat Panel */}
-          <div className="flex-1 flex flex-col bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-              {messages.length === 0 && (
-                <div className="h-full flex items-center justify-center text-center text-gray-400">
-                  <div>
-                    <LineChart className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>Start a new investigation</p>
-                    <p className="text-sm mt-2">Ask about failing pipelines, broken schemas, or lineage impacts</p>
-                  </div>
-                </div>
-              )}
-              {messages.map((msg, idx) => (
-                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg ${msg.role === 'user' ? 'bg-red-600 text-white rounded-br-none' : 'bg-slate-700 text-gray-100 rounded-bl-none'}`}>
-                    <p className="text-sm">{msg.content}</p>
-                  </div>
-                </div>
-              ))}
-              <div ref={messagesEndRef} />
+        {/* ── Main content area ── */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+          {/* Top bar */}
+          <div className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2">
+              <Database className="w-5 h-5 text-red-500" />
+              <span className="font-semibold">Pipeline Autopsy</span>
             </div>
-            {currentSession && (
-              <div className="px-4 py-3 border-t border-slate-700 bg-slate-700/50">
-                <input
-                  type="text"
-                  value={assetFqn}
-                  onChange={e => setAssetFqn(e.target.value)}
-                  placeholder="Asset FQN (e.g., snowflake.prod.orders_daily)"
-                  className="w-full px-3 py-2 rounded bg-slate-600 border border-slate-500 text-white placeholder-gray-400 text-sm"
-                />
+            <div className="w-9" />
+          </div>
+
+          {/* Content row */}
+          <div className="flex-1 flex min-h-0 gap-3 p-3 overflow-hidden">
+
+            {/* ── Chat panel ── */}
+            <div className="flex-1 flex flex-col bg-slate-800 rounded-lg border border-slate-700 min-w-0 overflow-hidden">
+
+              {/* Messages — scrollable */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar min-h-0">
+                {messages.length === 0 && (
+                  <div className="h-full flex items-center justify-center text-center text-gray-400">
+                    <div>
+                      <LineChart className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p className="font-medium">Start a new investigation</p>
+                      <p className="text-sm mt-2 text-gray-500">Ask about failing pipelines, broken schemas, or lineage impacts</p>
+                    </div>
+                  </div>
+                )}
+                {messages.map((msg, idx) => (
+                  <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg text-sm ${msg.role === 'user' ? 'bg-red-600 text-white rounded-br-none' : 'bg-slate-700 text-gray-100 rounded-bl-none'}`}>
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
               </div>
-            )}
-            {currentSession ? (
-              <form onSubmit={sendQuery} className="p-4 border-t border-slate-700 bg-slate-700/50">
-                <div className="flex gap-2">
+
+              {/* Asset FQN input */}
+              {currentSession && (
+                <div className="px-4 py-2.5 border-t border-slate-700 bg-slate-700/40 flex-shrink-0">
                   <input
                     type="text"
-                    value={inputMessage}
-                    onChange={e => setInputMessage(e.target.value)}
-                    placeholder="Ask about pipeline failures, schema changes..."
-                    disabled={querying}
-                    className="flex-1 px-4 py-2 rounded-lg bg-slate-600 border border-slate-500 text-white placeholder-gray-400 focus:outline-none focus:border-red-500 disabled:opacity-50"
+                    value={assetFqn}
+                    onChange={e => setAssetFqn(e.target.value)}
+                    placeholder="Asset FQN (e.g., snowflake.prod.orders_daily)"
+                    className="w-full px-3 py-2 rounded bg-slate-600 border border-slate-500 text-white placeholder-gray-400 text-sm focus:outline-none focus:border-red-500"
                   />
-                  <button type="submit" disabled={querying || !inputMessage.trim()} className="p-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-                    {querying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                </div>
+              )}
+
+              {/* Message input */}
+              <div className="p-3 border-t border-slate-700 bg-slate-700/40 flex-shrink-0">
+                {currentSession ? (
+                  <form onSubmit={sendQuery} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={inputMessage}
+                      onChange={e => setInputMessage(e.target.value)}
+                      placeholder="Ask about pipeline failures, schema changes..."
+                      disabled={querying}
+                      className="flex-1 px-4 py-2 rounded-lg bg-slate-600 border border-slate-500 text-white placeholder-gray-400 focus:outline-none focus:border-red-500 disabled:opacity-50 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      disabled={querying || !inputMessage.trim()}
+                      className="p-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                    >
+                      {querying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                    </button>
+                  </form>
+                ) : (
+                  <p className="text-center text-gray-400 text-sm py-1">Create a new investigation to start</p>
+                )}
+              </div>
+            </div>
+
+            {/* ── Right panel ── */}
+            <div className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden">
+
+              {/* Investigation status card */}
+              {currentInvestigation && (
+                <div className="bg-slate-800 rounded-lg border border-slate-700 p-4 space-y-3 flex-shrink-0">
+                  <div className="flex items-center gap-2">
+                    {isInvestigating && <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />}
+                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${currentInvestigation.status === 'COMPLETED' ? 'bg-green-500' : currentInvestigation.status === 'FAILED' ? 'bg-red-500' : 'bg-yellow-500'}`} />
+                    <span className="text-xs font-medium text-gray-300 capitalize">{currentInvestigation.status.toLowerCase().replace('_', ' ')}</span>
+                  </div>
+
+                  {currentInvestigation.root_cause && (
+                    <>
+                      <div>
+                        <p className="text-xs font-semibold text-gray-400 mb-1">ROOT CAUSE</p>
+                        <p className="text-sm text-gray-200">{currentInvestigation.root_cause.one_line_summary}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 flex-shrink-0">Confidence</span>
+                        <div className="flex-1 h-1.5 bg-slate-600 rounded-full">
+                          <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${currentInvestigation.root_cause.confidence * 100}%` }} />
+                        </div>
+                        <span className="text-xs font-semibold text-green-400 flex-shrink-0">{(currentInvestigation.root_cause.confidence * 100).toFixed(0)}%</span>
+                      </div>
+                      {currentInvestigation.root_cause.suggested_fixes?.[0] && (
+                        <div className="bg-slate-700/60 rounded-lg p-3">
+                          <p className="text-xs font-semibold text-gray-400 mb-1">SUGGESTED FIX</p>
+                          <p className="text-xs text-gray-300">{currentInvestigation.root_cause.suggested_fixes[0].description}</p>
+                          {currentInvestigation.root_cause.suggested_fixes[0].code_snippet && (
+                            <pre className="text-xs text-green-400 mt-2 bg-slate-900 p-2 rounded overflow-x-auto whitespace-pre-wrap">
+                              {currentInvestigation.root_cause.suggested_fixes[0].code_snippet}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Lineage mini-preview card — fixed height, opens popup */}
+              <div className="flex-1 bg-slate-800 rounded-lg border border-slate-700 overflow-hidden flex flex-col min-h-0">
+                {/* Card header */}
+                <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-700 flex-shrink-0">
+                  <div className="flex items-center gap-2">
+                    <LineChart className="w-4 h-4 text-red-400" />
+                    <span className="text-sm font-medium text-white">Data Lineage</span>
+                    {isInvestigating && <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />}
+                  </div>
+                  <button
+                    onClick={() => setShowLineageModal(true)}
+                    title="Open fullscreen"
+                    className="p-1.5 hover:bg-slate-700 rounded-md transition-colors text-gray-400 hover:text-white"
+                  >
+                    <Maximize2 className="w-4 h-4" />
                   </button>
                 </div>
-              </form>
-            ) : (
-              <div className="p-4 border-t border-slate-700 bg-slate-700/50 text-center text-gray-400 text-sm">
-                Create a new investigation to start
-              </div>
-            )}
-          </div>
 
-          {/* Lineage Panel */}
-          <div className="w-80 bg-slate-800 rounded-lg border border-slate-700 p-4 overflow-y-auto custom-scrollbar">
-            {currentInvestigation ? (
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-semibold mb-2">Investigation Status</h3>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${currentInvestigation.status === 'COMPLETED' ? 'bg-green-500' : currentInvestigation.status === 'FAILED' ? 'bg-red-500' : 'bg-yellow-500'}`} />
-                    <span className="text-sm">{currentInvestigation.status}</span>
-                  </div>
+                {/* Mini lineage preview */}
+                <div className="flex-1 min-h-0">
+                  {lineageAssets.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-500 text-xs text-center gap-2 p-4">
+                      <LineChart className="w-8 h-8 opacity-30" />
+                      <p>No lineage data yet</p>
+                      <p className="text-gray-600">Start an investigation to visualize pipeline lineage</p>
+                      <button
+                        onClick={() => setShowLineageModal(true)}
+                        className="mt-2 px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-gray-300 transition-colors text-xs flex items-center gap-1"
+                      >
+                        <Maximize2 className="w-3 h-3" /> Open Viewer
+                      </button>
+                    </div>
+                  ) : (
+                    <LineageVisualizer
+                      assets={lineageAssets}
+                      relationships={lineageRelationships}
+                      isLoading={isInvestigating}
+                      onNodeClick={(asset) => console.log('Node clicked:', asset)}
+                    />
+                  )}
                 </div>
-                {currentInvestigation.root_cause && (
-                  <div>
-                    <h3 className="font-semibold mb-2">Root Cause</h3>
-                    <div className="bg-slate-700/50 rounded p-3">
-                      <p className="text-sm text-gray-300 mb-3">{currentInvestigation.root_cause.one_line_summary}</p>
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="text-xs text-gray-400">Confidence:</span>
-                        <div className="flex-1 h-2 bg-slate-600 rounded">
-                          <div className="h-full bg-green-500 rounded" style={{ width: `${currentInvestigation.root_cause.confidence * 100}%` }} />
-                        </div>
-                        <span className="text-xs font-medium">{(currentInvestigation.root_cause.confidence * 100).toFixed(0)}%</span>
-                      </div>
-                      <div className="border-t border-slate-600 pt-3">
-                        <h4 className="text-xs font-semibold text-gray-400 mb-2">SUGGESTED FIX</h4>
-                        <p className="text-xs text-gray-300">{currentInvestigation.root_cause.suggested_fixes?.[0]?.description}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {currentInvestigation.lineage_subgraph && (
-                  <div>
-                    <h3 className="font-semibold mb-2">Lineage ({currentInvestigation.lineage_subgraph.nodes.length} nodes)</h3>
-                    <div className="space-y-2">
-                      {currentInvestigation.lineage_subgraph.nodes.map(node => (
-                        <div key={node.fqn}>
-                        <span className="text-sm font-medium truncate">{node.display_name}</span>
-                        </div>
-                    ))}
-                    </div>
+
+                {/* Open fullscreen hint */}
+                {lineageAssets.length > 0 && (
+                  <div className="flex-shrink-0 border-t border-slate-700 px-3 py-2">
+                    <button
+                      onClick={() => setShowLineageModal(true)}
+                      className="w-full py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 transition-colors text-xs text-gray-300 flex items-center justify-center gap-1.5"
+                    >
+                      <Maximize2 className="w-3 h-3" /> Expand Lineage View
+                    </button>
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="h-full flex items-center justify-center text-center text-gray-400">
-                <div>
-                  <LineChart className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p className="text-sm">Lineage visualization</p>
-                  <p className="text-xs mt-2">appears here</p>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Connection Manager Modal */}
+      {/* ── Lineage fullscreen popup ── */}
+      <LineageModal
+        isOpen={showLineageModal}
+        onClose={() => setShowLineageModal(false)}
+        assets={lineageAssets}
+        relationships={lineageRelationships}
+        isLoading={isInvestigating}
+      />
+
+      {/* ── Connection Manager Modal ── */}
       <ConnectionManager
         isOpen={showConnectionManager}
         onClose={() => setShowConnectionManager(false)}
@@ -547,11 +702,11 @@ export default function PipelineAutopsy() {
       />
 
       <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
       `}</style>
-    </div>
+    </>
   );
 }

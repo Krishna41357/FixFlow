@@ -1,4 +1,4 @@
-
+﻿
 services:
   # ===== MONGODB =====
   mongodb:
@@ -8,7 +8,7 @@ services:
     ports:
       - "27017:27017"
     environment:
-      MONGO_INITDB_DATABASE: rag_database        # ✅ fixed: matches hardcoded db name
+      MONGO_INITDB_DATABASE: rag_database        # âœ… fixed: matches hardcoded db name
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
@@ -37,27 +37,28 @@ services:
     env_file:
       - .env
     environment:
-      # ✅ fixed: no auth + correct db name
+      # âœ… fixed: no auth + correct db name
       MONGO_URI: mongodb://mongodb:27017/rag_database
 
       # Auth
       SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-this-in-production-12345678}
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
 
-      # ✅ fixed: points to compose service name
+      # âœ… fixed: points to compose service name
       OPENMETADATA_URL: http://openmetadata-server:8585
       OPENMETADATA_API_KEY: ${OPENMETADATA_API_KEY}
 
-      # LLM — groq is your only real key
+      # LLM â€” groq is your only real key
       GROQ_API_KEY: ${GROQ_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-demo}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-sk-ant-demo}
-      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-groq}  # ✅ groq since that key looks real
+      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-groq}  # âœ… groq since that key looks real
       AI_MODEL: llama-3.3-70b-versatile
 
       # GitHub
       GITHUB_APP_ID: ${GITHUB_APP_ID:-123456}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-demo-secret}
+      GITHUB_TEST_PAT: ${GITHUB_TEST_PAT:-}
 
       # API
       CORS_ORIGINS: '["http://localhost:3000", "http://localhost:5173"]'
@@ -65,7 +66,7 @@ services:
       APP_PORT: 8000
       DEBUG: ${DEBUG:-true}
 
-    # ✅ removed volume mount so Docker build is actually used
+    # âœ… removed volume mount so Docker build is actually used
     networks:
       - pipeline_autopsy_network
     healthcheck:
