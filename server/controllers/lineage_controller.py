@@ -14,6 +14,7 @@ load_dotenv()
 OPENMETADATA_API_TIMEOUT = 30
 
 
+
 def fetch_lineage_subgraph(
     openmetadata_url: str,
     openmetadata_token: str,

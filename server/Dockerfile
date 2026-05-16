@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY server/requirements.txt .
+COPY requirements.txt .
 
 # Install without uvloop dependency on cmd
 RUN pip install --user --no-cache-dir --compile -r requirements.txt
