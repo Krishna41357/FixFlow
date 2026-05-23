@@ -3,33 +3,43 @@ Authentication Routes
 Handles user registration, login, and JWT token management.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from models.users import UserCreate, UserLogin, Token, TokenData
 from controllers import auth_controller
 
 router = APIRouter(prefix="/users", tags=["auth"])
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> TokenData:
-    """
-    FastAPI dependency to extract and validate current user from JWT token.
-    Used on all protected routes.
-    """
-    token = credentials.credentials
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> TokenData:
+    # Try Authorization header first, then query param (for popup OAuth flow)
+    token = None
+    if credentials:
+        token = credentials.credentials
+    else:
+        token = request.query_params.get("token")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     token_data = auth_controller.verify_token(token)
-    
     if not token_data:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    return token_data
 
+    return token_data
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserCreate) -> Token:

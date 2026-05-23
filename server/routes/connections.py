@@ -177,10 +177,28 @@ async def delete_connection(
     """
     Delete a connection.
     Related investigations will be marked as orphaned.
+    GitHub webhooks (if registered) will be cleaned up.
     
     **Path Parameters:**
     - `connection_id`: Connection ID
     """
+    # Try to cleanup GitHub webhook before deleting connection
+    # This is best-effort; we still delete the connection even if cleanup fails
+    try:
+        from controllers import github_controller, connection_controller
+        raw = connection_controller.get_connection_raw(connection_id, current_user.user_id)
+        if raw and isinstance(raw, dict) and raw.get("github_registration"):
+            # Extract installation info and attempt cleanup
+            reg_data = raw.get("github_registration", {})
+            if reg_data.get("selected_installation_id"):
+                installation_id = reg_data["selected_installation_id"]
+                installation_token = github_controller.get_installation_token(installation_id)
+                if installation_token:
+                    github_controller.delete_github_webhook(installation_token)
+    except Exception as e:
+        # Log but don't fail the connection deletion
+        print(f"WARNING: Failed to cleanup GitHub webhook: {e}")
+
     deleted = connection_controller.delete_connection(
         connection_id=connection_id,
         user_id=current_user.user_id

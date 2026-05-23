@@ -1,0 +1,175 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.4, pytest-7.4.3, pluggy-1.6.0 -- C:\Users\BIT\anaconda3\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\BIT\KS-RAG
+configfile: pytest.ini
+plugins: anyio-4.2.0, langsmith-0.4.42, cov-7.1.0
+collecting ... collected 14 items
+
+tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_success FAILED [  7%]
+tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_empty_response FAILED [ 14%]
+tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_api_error FAILED [ 21%]
+tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_unauthorized FAILED [ 28%]
+tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_max_depth_zero FAILED [ 35%]
+tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_large_depth FAILED [ 42%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_column_renamed FAILED [ 50%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_column_dropped FAILED [ 57%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_type_change FAILED [ 64%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_empty_nodes PASSED [ 71%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_single_node FAILED [ 78%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_no_changes FAILED [ 85%]
+tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_null_constraint_change FAILED [ 92%]
+tests/test_lineage_controller.py::TestLineageSubgraphConstruction::test_lineage_subgraph_valid FAILED [100%]
+
+================================== FAILURES ===================================
+_____________ TestLineageTraversal.test_traverse_upstream_success _____________
+tests\test_lineage_controller.py:56: in test_traverse_upstream_success
+    nodes = traverse_upstream(
+E   TypeError: traverse_upstream() got an unexpected keyword argument 'asset_fqn'
+_________ TestLineageTraversal.test_traverse_upstream_empty_response __________
+tests\test_lineage_controller.py:78: in test_traverse_upstream_empty_response
+    nodes = traverse_upstream(
+E   TypeError: traverse_upstream() got an unexpected keyword argument 'asset_fqn'
+____________ TestLineageTraversal.test_traverse_upstream_api_error ____________
+tests\test_lineage_controller.py:96: in test_traverse_upstream_api_error
+    nodes = traverse_upstream(
+E   TypeError: traverse_upstream() got an unexpected keyword argument 'asset_fqn'
+__________ TestLineageTraversal.test_traverse_upstream_unauthorized ___________
+tests\test_lineage_controller.py:112: in test_traverse_upstream_unauthorized
+    nodes = traverse_upstream(
+E   TypeError: traverse_upstream() got an unexpected keyword argument 'asset_fqn'
+_________ TestLineageTraversal.test_traverse_upstream_max_depth_zero __________
+tests\test_lineage_controller.py:134: in test_traverse_upstream_max_depth_zero
+    nodes = traverse_upstream(
+E   TypeError: traverse_upstream() got an unexpected keyword argument 'asset_fqn'
+___________ TestLineageTraversal.test_traverse_upstream_large_depth ___________
+tests\test_lineage_controller.py:154: in test_traverse_upstream_large_depth
+    nodes = traverse_upstream(
+E   TypeError: traverse_upstream() got an unexpected keyword argument 'asset_fqn'
+_______ TestBreakPointDetection.test_detect_break_point_column_renamed ________
+tests\test_lineage_controller.py:174: in test_detect_break_point_column_renamed
+    LineageNode(
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name...'is_break_point': False}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name...'is_break_point': False}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name...'is_break_point': False}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name...'is_break_point': False}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+_______ TestBreakPointDetection.test_detect_break_point_column_dropped ________
+tests\test_lineage_controller.py:202: in test_detect_break_point_column_dropped
+    LineageNode(
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...': {'type': 'VARCHAR'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...': {'type': 'VARCHAR'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...': {'type': 'VARCHAR'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...': {'type': 'VARCHAR'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+_________ TestBreakPointDetection.test_detect_break_point_type_change _________
+tests\test_lineage_controller.py:229: in test_detect_break_point_type_change
+    LineageNode(
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...ount': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...ount': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...ount': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...ount': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+_________ TestBreakPointDetection.test_detect_break_point_single_node _________
+tests\test_lineage_controller.py:263: in test_detect_break_point_single_node
+    LineageNode(
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+_________ TestBreakPointDetection.test_detect_break_point_no_changes __________
+tests\test_lineage_controller.py:278: in test_detect_break_point_no_changes
+    LineageNode(
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'source.data', 'na...{'id': {'type': 'INT'}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+___ TestBreakPointDetection.test_detect_break_point_null_constraint_change ____
+tests\test_lineage_controller.py:299: in test_detect_break_point_null_constraint_change
+    LineageNode(
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...NT', 'nullable': True}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...NT', 'nullable': True}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...NT', 'nullable': True}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'raw.data', 'name'...NT', 'nullable': True}}}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+_________ TestLineageSubgraphConstruction.test_lineage_subgraph_valid _________
+tests\test_lineage_controller.py:326: in test_lineage_subgraph_valid
+    LineageNode(id="raw.users", name="raw.users"),
+E   pydantic_core._pydantic_core.ValidationError: 4 validation errors for LineageNode
+E   fqn
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name': 'raw.users'}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   display_name
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name': 'raw.users'}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   asset_type
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name': 'raw.users'}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   service_name
+E     Field required [type=missing, input_value={'id': 'raw.users', 'name': 'raw.users'}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+=========================== short test summary info ===========================
+FAILED tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_success
+FAILED tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_empty_response
+FAILED tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_api_error
+FAILED tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_unauthorized
+FAILED tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_max_depth_zero
+FAILED tests/test_lineage_controller.py::TestLineageTraversal::test_traverse_upstream_large_depth
+FAILED tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_column_renamed
+FAILED tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_column_dropped
+FAILED tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_type_change
+FAILED tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_single_node
+FAILED tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_no_changes
+FAILED tests/test_lineage_controller.py::TestBreakPointDetection::test_detect_break_point_null_constraint_change
+FAILED tests/test_lineage_controller.py::TestLineageSubgraphConstruction::test_lineage_subgraph_valid
+======================== 13 failed, 1 passed in 2.38s =========================

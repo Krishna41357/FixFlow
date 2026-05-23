@@ -1,5 +1,5 @@
 # ===== BUILDER STAGE =====
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
@@ -10,7 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Install without uvloop dependency on cmd
 RUN pip install --user --no-cache-dir --compile -r requirements.txt
 
 # ===== RUNTIME STAGE =====
@@ -32,7 +31,6 @@ ENV PATH=/home/appuser/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONHASHSEED=random \
-    # Tell the app MongoDB is at the compose service name, not localhost
     MONGO_URI=mongodb://mongo:27017/rag_database \
     OPENMETADATA_URL=http://openmetadata:8585
 
@@ -45,7 +43,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=5 \
 
 EXPOSE 8000
 
-# Removed --loop uvloop (not guaranteed to be installed)
 CMD ["uvicorn", "app:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \

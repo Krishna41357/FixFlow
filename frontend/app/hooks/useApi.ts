@@ -1,15 +1,20 @@
 /**
  * useApi Hook - Custom hook for API calls with auth integration
+ *
+ * Fix: specialized hooks (useChatApi etc.) previously depended on the entire
+ * `api` object in useCallback deps, which is a new object every render and
+ * caused infinite re-render loops. They now depend on `request` directly.
  */
 
-'use client';
+"use client";
 
-import { useCallback, useState } from 'react';
-import axios, { AxiosError, AxiosResponse } from 'axios';
-import { useAuth } from '@/app/components/AuthContext';
-import { ApiError, getHeaders } from '@/app/utils/api';
+import { useCallback, useState } from "react";
+import axios, { AxiosError, AxiosResponse } from "axios";
+import { useAuth } from "@/app/components/AuthContext";
+import { ApiError, getHeaders } from "@/app/utils/api";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 export type UseApiState<T> = {
   data: T | null;
@@ -23,9 +28,8 @@ export type UseApiOptions = {
   skipAuth?: boolean;
 };
 
-/**
- * Generic hook for making API calls with automatic auth handling
- */
+// ── Base hook ─────────────────────────────────────────────────────────────────
+
 export function useApi<T = unknown>() {
   const { token } = useAuth();
   const [state, setState] = useState<UseApiState<T>>({
@@ -36,21 +40,19 @@ export function useApi<T = unknown>() {
 
   const request = useCallback(
     async (
-      method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+      method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH",
       url: string,
       payload?: unknown,
       options?: UseApiOptions
     ): Promise<T | null> => {
       setState({ data: null, error: null, isLoading: true });
-
       try {
         const authToken = !options?.skipAuth ? token || undefined : undefined;
         const headers = getHeaders(authToken);
-        
-        const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+        const fullUrl = url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
 
         const response: AxiosResponse<T> = await axios({
-          method: method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch',
+          method: method.toLowerCase() as "get" | "post" | "put" | "delete" | "patch",
           url: fullUrl,
           headers,
           data: payload,
@@ -69,40 +71,32 @@ export function useApi<T = unknown>() {
               )
             : new ApiError(0, err, String(err));
 
-        setState({
-          data: null,
-          error: error.message,
-          isLoading: false,
-        });
+        setState({ data: null, error: error.message, isLoading: false });
         options?.onError?.(error);
         return null;
       }
     },
-    [token]
+    [token] // only real dep — token changing is the only time we need a new fn
   );
 
   const get = useCallback(
-    (url: string, options?: UseApiOptions) => request('GET', url, undefined, options),
+    (url: string, options?: UseApiOptions) => request("GET", url, undefined, options),
     [request]
   );
-
   const post = useCallback(
-    (url: string, payload?: unknown, options?: UseApiOptions) => request('POST', url, payload, options),
+    (url: string, payload?: unknown, options?: UseApiOptions) => request("POST", url, payload, options),
     [request]
   );
-
   const put = useCallback(
-    (url: string, payload?: unknown, options?: UseApiOptions) => request('PUT', url, payload, options),
+    (url: string, payload?: unknown, options?: UseApiOptions) => request("PUT", url, payload, options),
     [request]
   );
-
   const patch = useCallback(
-    (url: string, payload?: unknown, options?: UseApiOptions) => request('PATCH', url, payload, options),
+    (url: string, payload?: unknown, options?: UseApiOptions) => request("PATCH", url, payload, options),
     [request]
   );
-
   const del = useCallback(
-    (url: string, options?: UseApiOptions) => request('DELETE', url, undefined, options),
+    (url: string, options?: UseApiOptions) => request("DELETE", url, undefined, options),
     [request]
   );
 
@@ -118,111 +112,146 @@ export function useApi<T = unknown>() {
   };
 }
 
-/**
- * Specialized hook for chat operations
- */
-export function useChatApi() {
-  const api = useApi();
+// ── Chat hook ─────────────────────────────────────────────────────────────────
 
-const sendQuery = useCallback(
-  async (chatId: string, query: string, connectionId: string, assetFqn?: string) => {
-    const response = await api.post(`/api/v1/chats/${chatId}/query`, { 
-      message: query,
-      connection_id: connectionId,
-      asset_fqn: assetFqn || query
-    });
-    return response;
-  },
-  [api]
-);
+export function useChatApi() {
+  const { request, ...rest } = useApi();
+
+  // FIX: depend on `request` not the whole `api` object
+  const sendQuery = useCallback(
+    async (chatId: string, query: string, connectionId: string, assetFqn?: string) =>
+      request("POST", `/api/v1/chats/${chatId}/query`, {
+        message: query,
+        connection_id: connectionId,
+        asset_fqn: assetFqn || query,
+      }),
+    [request]
+  );
 
   const createChat = useCallback(
-    async (title: string, connectionId: string) => {
-      const response = await api.post('/api/v1/chats', { title, connection_id: connectionId });
-      return response;
-    },
-    [api]
+    async (title: string, connectionId: string) =>
+      request("POST", "/api/v1/chats", { title, connection_id: connectionId }),
+    [request]
   );
 
-  return {
-    ...api,
-    sendQuery,
-    createChat,
-  };
+  return { ...rest, request, sendQuery, createChat };
 }
 
-/**
- * Specialized hook for investigation operations
- */
+// ── Investigation hook ────────────────────────────────────────────────────────
+
 export function useInvestigationApi() {
-  const api = useApi();
+  const { request, ...rest } = useApi();
 
   const getInvestigation = useCallback(
-    async (investigationId: string) => {
-      const response = await api.get(`/api/v1/investigations/${investigationId}`);
-      return response;
-    },
-    [api]
+    async (investigationId: string) =>
+      request("GET", `/api/v1/investigations/${investigationId}`),
+    [request]
   );
 
+  // Polls until COMPLETED or FAILED, max 5 min
   const pollInvestigation = useCallback(
-    async (investigationId: string, interval: number = 2000): Promise<unknown> => {
-      return new Promise((resolve, reject) => {
-        const pollInterval = setInterval(async () => {
-          const response = await api.get(`/api/v1/investigations/${investigationId}`);
-          if (response && (response as unknown as Record<string, unknown>).status === 'COMPLETED') {
-            clearInterval(pollInterval);
-            resolve(response);
+    (investigationId: string, interval = 2000): Promise<unknown> =>
+      new Promise((resolve, reject) => {
+        const id = setInterval(async () => {
+          const res = await request("GET", `/api/v1/investigations/${investigationId}`);
+          const status = (res as any)?.status as string | undefined;
+          if (status === "COMPLETED" || status === "FAILED") {
+            clearInterval(id);
+            resolve(res);
           }
         }, interval);
 
         setTimeout(() => {
-          clearInterval(pollInterval);
-          reject(new Error('Investigation polling timeout'));
-        }, 300000); // 5 minutes max
-      });
-    },
-    [api]
+          clearInterval(id);
+          reject(new Error("Investigation polling timeout"));
+        }, 300_000);
+      }),
+    [request]
   );
 
-  return {
-    ...api,
-    getInvestigation,
-    pollInvestigation,
-  };
+  return { ...rest, request, getInvestigation, pollInvestigation };
 }
 
-/**
- * Specialized hook for connection operations
- */
-export function useConnectionApi() {
-  const api = useApi();
+// ── Connection hook ───────────────────────────────────────────────────────────
 
-  const getConnections = useCallback(async () => {
-    const response = await api.get('/api/v1/connections');
-    return response;
-  }, [api]);
+export function useConnectionApi() {
+  const { request, ...rest } = useApi();
+
+  const getConnections = useCallback(
+    () => request("GET", "/api/v1/connections"),
+    [request]
+  );
 
   const createConnection = useCallback(
-    async (connectionData: unknown) => {
-      const response = await api.post('/api/v1/connections', connectionData);
-      return response;
-    },
-    [api]
+    (connectionData: unknown) => request("POST", "/api/v1/connections", connectionData),
+    [request]
   );
 
   const deleteConnection = useCallback(
-    async (connectionId: string) => {
-      const response = await api.delete(`/api/v1/connections/${connectionId}`);
-      return response;
-    },
-    [api]
+    (connectionId: string) => request("DELETE", `/api/v1/connections/${connectionId}`),
+    [request]
+  );
+
+  return { ...rest, request, getConnections, createConnection, deleteConnection };
+}
+
+// ── GitHub hook ───────────────────────────────────────────────────────────────
+// Used by the PR bot setup page — self-contained auth (own JWT state),
+// but exposes a hook form for any component that already has a token via context.
+
+export function useGitHubApi() {
+  const { request, ...rest } = useApi();
+
+  const getOAuthStatus = useCallback(
+    (connectionId: string) =>
+      request("GET", `/api/v1/github/oauth/status?connection_id=${connectionId}`),
+    [request]
+  );
+
+  const selectInstallation = useCallback(
+    (connectionId: string, installationId: string) =>
+      request(
+        "POST",
+        `/api/v1/github/oauth/select-installation?connection_id=${connectionId}&installation_id=${installationId}`
+      ),
+    [request]
+  );
+
+  const configureWebhook = useCallback(
+    (payload: {
+      connection_id: string;
+      installation_id: string;
+      webhook_url: string;
+      webhook_secret: string;
+    }) => request("POST", "/api/v1/github/oauth/configure-webhook", payload),
+    [request]
+  );
+
+  const verifyWebhook = useCallback(
+    (connectionId: string) =>
+      request("GET", `/api/v1/github/webhook/verify?connection_id=${connectionId}`),
+    [request]
+  );
+
+  const cleanupWebhook = useCallback(
+    (connectionId: string) =>
+      request("POST", `/api/v1/github/webhook/cleanup?connection_id=${connectionId}`),
+    [request]
+  );
+
+  const listPRInvestigations = useCallback(
+    () => request("GET", "/api/v1/investigations?event_type=github"),
+    [request]
   );
 
   return {
-    ...api,
-    getConnections,
-    createConnection,
-    deleteConnection,
+    ...rest,
+    request,
+    getOAuthStatus,
+    selectInstallation,
+    configureWebhook,
+    verifyWebhook,
+    cleanupWebhook,
+    listPRInvestigations,
   };
 }

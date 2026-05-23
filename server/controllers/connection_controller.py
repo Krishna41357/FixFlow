@@ -1,6 +1,6 @@
 import os
 import requests
-from typing import List, Optional
+from typing import List, Optional, Any
 from datetime import datetime, timezone
 from pymongo import MongoClient
 from bson import ObjectId
@@ -56,6 +56,7 @@ def create_connection(user_id: str, connection_data: ConnectionCreate) -> Option
         "dbt_webhook_secret": connection_data.dbt_webhook_secret,
         "github_repo": connection_data.github_repo,
         "github_installation_id": None,
+        "github_registration": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "is_active": True
@@ -92,7 +93,6 @@ def get_user_connections(user_id: str) -> List[ConnectionResponse]:
 
         result = []
         for conn in connections:
-            token = conn.get("openmetadata_token", "")
             result.append(ConnectionResponse(
                 id=str(conn["_id"]),
                 name=conn.get("name") or conn.get("workspace_name", ""),
@@ -117,7 +117,6 @@ def get_connection_by_id(connection_id: str, user_id: str) -> Optional[Connectio
     user_id = str(user_id)
 
     try:
-        # Handle non-ObjectId connection_ids gracefully (e.g. "demo_conn")
         try:
             query = {"_id": ObjectId(connection_id), "user_id": user_id, "is_active": True}
         except Exception:
@@ -133,6 +132,26 @@ def get_connection_by_id(connection_id: str, user_id: str) -> Optional[Connectio
 
     except Exception as e:
         print(f"ERROR get_connection_by_id: {e}")
+        return None
+
+
+def get_connection_raw(connection_id: str, user_id: str) -> Optional[dict]:
+    """
+    Returns the raw MongoDB document for a connection.
+    Used by OAuth routes that need fields not mapped in ConnectionInDB
+    (e.g. github_registration).
+    """
+    if not connection_id or not user_id:
+        return None
+
+    user_id = str(user_id)
+
+    try:
+        return connections_collection.find_one(
+            {"_id": ObjectId(connection_id), "user_id": user_id, "is_active": True}
+        )
+    except Exception as e:
+        print(f"ERROR get_connection_raw: {e}")
         return None
 
 
@@ -195,4 +214,38 @@ def set_github_installation_id(connection_id: str, user_id: str, installation_id
         return result.modified_count > 0
     except Exception as e:
         print(f"ERROR set_github_installation_id: {e}")
+        return False
+
+
+def update_connection_field(connection_id: str, user_id: str, field: str, value: Any) -> bool:
+    """
+    Generic field updater for a connection document.
+    Used by GitHub OAuth routes to store arbitrary fields
+    such as github_registration without needing a dedicated method per field.
+
+    Args:
+        connection_id: MongoDB ObjectId string of the connection
+        user_id:       Owner's user_id (ownership check)
+        field:         Top-level field name to set (e.g. "github_registration")
+        value:         Any JSON-serialisable value
+
+    Returns:
+        True if a document was modified, False otherwise.
+    """
+    if not connection_id or not user_id or not field:
+        return False
+
+    user_id = str(user_id)
+
+    try:
+        result = connections_collection.update_one(
+            {"_id": ObjectId(connection_id), "user_id": user_id},
+            {"$set": {
+                field: value,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        return result.modified_count > 0
+    except Exception as e:
+        print(f"ERROR update_connection_field: {e}")
         return False

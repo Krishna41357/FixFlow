@@ -62,6 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await fetch(`${API_BASE_URL}/api/v1/users/me`, {
         headers: {
           'Authorization': `Bearer ${authToken}`,
+          "ngrok-skip-browser-warning": "true",
         },
       });
 
@@ -88,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
         },
         body: JSON.stringify({ email, password }),
       });
@@ -131,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
         },
         body: JSON.stringify(payload),
       });
@@ -167,7 +170,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   
   try {
     const response = await fetch(`${API_BASE_URL}/api/v1/connections`, {
-      headers: { 'Authorization': `Bearer ${tokenToUse}` },
+      headers: { 'Authorization': `Bearer ${tokenToUse}`,
+      'ngrok-skip-browser-warning': 'true',
+    },
+      
     });
 
     if (response.ok) {
@@ -191,6 +197,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
       },
       body: JSON.stringify(data),
     });

@@ -150,10 +150,15 @@ async def api_v1_root():
                 "delete": "DELETE /api/v1/chats/{id}"
             },
             "github": {
-                "webhook": "POST /api/v1/github/webhook",
-                "authorize": "POST /api/v1/github/authorize",
-                "analysis": "GET /api/v1/github/pr-analysis/{pr_number}"
-            }
+                "webhook":              "POST /api/v1/github/webhook",
+                "oauth_start":          "GET  /api/v1/github/oauth/start",
+                "oauth_callback":       "GET  /api/v1/github/oauth/callback",
+                "oauth_status":         "GET  /api/v1/github/oauth/status",
+                "select_installation":  "POST /api/v1/github/oauth/select-installation",
+                "configure_webhook":    "POST /api/v1/github/oauth/configure-webhook",
+                "verify_webhook":       "GET  /api/v1/github/webhook/verify",
+                "cleanup_webhook":      "POST /api/v1/github/webhook/cleanup",
+            },
         }
     }
 

@@ -1,8 +1,8 @@
-# 🔍 Pipeline Autopsy — AI-Powered Data Lineage Failure Diagnosis
+# 🔍 FixFlow — AI-Powered Data Lineage Failure Diagnosis
 
 **Hackathon Project:** Automatic root cause analysis for data pipeline failures using OpenMetadata lineage and AI reasoning.
 
-When a data asset breaks — a dbt test fails, a column gets renamed, a pipeline produces nulls — **Pipeline Autopsy** automatically walks the column-level lineage graph to find the exact breaking node, then explains the root cause in plain English and surfaces a fix.
+When a data asset breaks — a dbt test fails, a column gets renamed, a pipeline produces nulls — **FixFlow** automatically walks the column-level lineage graph to find the exact breaking node, then explains the root cause in plain English and surfaces a fix.
 
 A GitHub PR bot catches schema-breaking changes **before they're merged**, posting AI-generated impact warnings directly in pull request comments.
 
