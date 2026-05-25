@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, computed_field
 from .base import MongoBase, InvestigationStatus, SeverityLevel, utc_now
 from .lineage import LineageSubgraph
 from .events import AffectedAsset
+from typing import Optional, List, Any   # add Any
 
 
 # ── Root cause (AI reasoning output) ─────────────────────────────────────────
@@ -123,6 +124,7 @@ class InvestigationResponse(BaseModel):
 
     # Only present when status=completed
     root_cause: Optional[RootCause] = None
+    pr_root_cause: Optional[Any] = None
     lineage_subgraph: Optional[LineageSubgraph] = None
 
     # GitHub

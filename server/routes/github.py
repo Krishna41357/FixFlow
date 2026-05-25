@@ -1,5 +1,26 @@
 ﻿"""
-GitHub Routes - PR Webhooks + OAuth App Registration
+GitHub Routes — PR Webhooks + OAuth App Registration
+
+Route organisation:
+  ── PR webhook ───────────────────────────────────────────────────────────────
+  POST /webhook                    — receives GitHub PR events, starts investigation
+
+  ── GitHub OAuth + App Registration ──────────────────────────────────────────
+  GET  /oauth/start                — initiates OAuth flow
+  GET  /oauth/callback             — handles OAuth callback
+  POST /oauth/select-installation  — user picks which GitHub App installation to use
+  POST /oauth/configure-webhook    — registers webhook on GitHub repo
+  GET  /oauth/status               — returns full registration state
+  GET  /webhook/verify             — checks webhook is still active on GitHub
+  POST /webhook/cleanup            — deletes webhook from GitHub and clears local state
+
+Changes from previous version:
+  - run_investigation_and_update_pr replaced by run_pr_investigation
+    (multi-asset, merged lineage, new AI schema, new comment renderer)
+  - Webhook handler now calls filter_relevant_files + derive_fqns to build
+    asset_fqn_map before handing off to background task
+  - render_placeholder_comment used for initial comment (replaces inline f-string)
+  - All OAuth routes, helpers, and auth logic are UNCHANGED
 """
 
 import os
@@ -26,12 +47,12 @@ from models.users import TokenData
 
 router = APIRouter(prefix="/github", tags=["github"])
 
-GITHUB_CLIENT_ID      = os.getenv("GITHUB_CLIENT_ID")
-GITHUB_CLIENT_SECRET  = os.getenv("GITHUB_CLIENT_SECRET")
-GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/api/v1/github/oauth/callback")
-FRONTEND_SUCCESS_URL  = os.getenv("FRONTEND_SUCCESS_URL", "http://localhost:3000/github/setup")
-FRONTEND_ERROR_URL    = os.getenv("FRONTEND_ERROR_URL",   "http://localhost:3000/error")
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
+GITHUB_CLIENT_ID     = os.getenv("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
+GITHUB_REDIRECT_URI  = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/api/v1/github/oauth/callback")
+FRONTEND_SUCCESS_URL = os.getenv("FRONTEND_SUCCESS_URL", "http://localhost:3000/github/setup")
+FRONTEND_ERROR_URL   = os.getenv("FRONTEND_ERROR_URL",   "http://localhost:3000/error")
+API_BASE_URL         = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
 
 GITHUB_AUTHORIZE_URL     = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL         = "https://github.com/login/oauth/access_token"
@@ -40,65 +61,173 @@ GITHUB_INSTALLATIONS_URL = "https://api.github.com/user/installations"
 GITHUB_REPOS_URL         = "https://api.github.com/user/installations/{installation_id}/repositories"
 
 
-# ── PR webhook background task ────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# PR WEBHOOK
+# ═════════════════════════════════════════════════════════════════════════════
 
-def run_investigation_and_update_pr(
-    investigation_id, user_id, connection_id,
-    openmetadata_url, openmetadata_token,
-    gh_token, repo_owner, repo_name, pr_number, comment_id
-):
-    investigation_controller.run_investigation(
-        investigation_id=investigation_id,
-        user_id=user_id,
+@router.post("/webhook", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
+async def github_pr_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_hub_signature_256: str = Header(None),
+    x_github_event: str = Header(None),
+    connection_id: str = None,
+    user_id: str = None
+) -> dict:
+    # ── Gate 1: required query params ────────────────────────────────────────
+    if not connection_id or not user_id:
+        raise HTTPException(status_code=400, detail="connection_id and user_id are required")
+
+    raw_body = await request.body()
+
+    # ── Gate 2: signature header present ─────────────────────────────────────
+    if not x_hub_signature_256:
+        raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")
+
+    # ── Gate 3: signature valid ───────────────────────────────────────────────
+    if not github_controller.verify_github_signature(x_hub_signature_256, raw_body):
+        raise HTTPException(status_code=401, detail="Invalid GitHub signature")
+
+    # ── Gate 4: parse JSON ────────────────────────────────────────────────────
+    try:
+        body = json.loads(raw_body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid JSON: {str(e)}")
+
+    # ── Gate 5: event type filter BEFORE Pydantic parse ──────────────────────
+    action = body.get("action", "")
+    if x_github_event != "pull_request" or action not in ("opened", "synchronize"):
+        return {"message": f"Ignoring event: {x_github_event}/{action}"}
+
+    # ── Gate 6: parse into PRWebhookEvent (pull_request events only) ─────────
+    try:
+        payload = PRWebhookEvent(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
+
+    # ── Gate 7: connection lookup — derive trusted user_id from DB ───────────
+    connection = connection_controller.get_connection_by_id(
         connection_id=connection_id,
-        openmetadata_url=openmetadata_url,
-        openmetadata_token=openmetadata_token
+        user_id=user_id
     )
-    inv = investigation_controller.get_investigation(investigation_id, user_id)
-    if not inv:
-        return
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
 
-    root_cause  = inv.root_cause
-    if root_cause is None:
-        return
+    trusted_user_id = connection.user_id
 
-    summary     = root_cause.one_line_summary
-    explanation = root_cause.detailed_explanation
-    confidence  = root_cause.confidence
-    fixes       = root_cause.suggested_fixes
-    affected    = root_cause.affected_assets
+    # ── Gate 8: GitHub token ──────────────────────────────────────────────────
+    installation_id = str(
+        getattr(connection, "github_installation_id", None)
+        or payload.installation.get("id")
+        or "demo"
+    )
 
-    fix_text      = "\n".join(f"- {f.description}" for f in fixes)    if fixes    else "No fixes suggested"
-    affected_text = "\n".join(f"- `{a.fqn}` ({a.severity})" for a in affected) if affected else "None detected"
+    gh_token = github_controller.get_installation_token(installation_id)
+    if not gh_token:
+        raise HTTPException(status_code=401, detail="Failed to get GitHub App token")
 
-    updated_comment = f"""## 🔍 Pipeline Autopsy - Analysis Complete
+    # ── Dict access — pull_request and repository are Dict[str, Any] ─────────
+    pr_number  = payload.pull_request["number"]
+    pr_url     = payload.pull_request["html_url"]
+    repo_owner = payload.repository["owner"]["login"]
+    repo_name  = payload.repository["name"]
 
-### Root Cause
-{summary}
-
-{explanation}
-
-### Affected Assets
-{affected_text}
-
-### Suggested Fixes
-{fix_text}
-
-### Confidence: {confidence*100:.0f}%
-
----
-*Investigation `{investigation_id}` completed by Pipeline Autopsy*"""
-
-    github_controller.update_pr_comment(
+    # ── Step 1: Fetch all changed files ───────────────────────────────────────
+    all_changed = github_controller.parse_pr_diff(
         github_token=gh_token,
         repo_owner=repo_owner,
         repo_name=repo_name,
-        comment_id=comment_id,
-        comment_body=updated_comment
+        pr_number=pr_number
     )
 
+    # ── Step 2: Filter to data-relevant files only ────────────────────────────
+    relevant_files = github_controller.filter_relevant_files(all_changed)
 
-# ── OAuth helpers ─────────────────────────────────────────────────────────────
+    if not relevant_files:
+        return {
+            "pr_number": pr_number,
+            "analyzed":  False,
+            "message":   "No data-relevant files changed (.sql or dbt .yml)"
+        }
+
+    # ── Step 3: Derive FQNs + strip patches for all relevant files ───────────
+    raw_fqn_map = github_controller.derive_fqns(relevant_files)
+
+# Build a filename → asset lookup so composite keys can find their patch
+    filename_to_asset = {asset.filename: asset for asset in relevant_files}
+    
+    asset_fqn_map = {}
+    for key, (fqn, approximate) in raw_fqn_map.items():
+        base_filename = key.split("::")[0]
+        asset = filename_to_asset.get(base_filename)
+        stripped_patch = github_controller._strip_context_lines(
+        asset.patch if asset else None
+        )
+        asset_fqn_map[key] = (fqn, approximate, stripped_patch)
+
+    # ── Step 4: Create investigation document ─────────────────────────────────
+    all_fqns    = [fqn for (fqn, _, _) in asset_fqn_map.values()]
+    primary_fqn = all_fqns[0] if all_fqns else "unknown"
+
+    investigation_id = investigation_controller.create_investigation(
+        user_id=trusted_user_id,
+        connection_id=connection_id,
+        event_id=f"github-pr-{pr_number}",
+        failure_message=(
+            f"GitHub PR #{pr_number} ({pr_url}): "
+            f"Schema changes detected in {len(relevant_files)} file(s): "
+            f"{', '.join(a.filename for a in relevant_files)}"
+        ),
+        asset_fqn=primary_fqn,
+        event_type="github_pr"
+    )
+    if not investigation_id:
+        raise HTTPException(status_code=500, detail="Failed to create investigation")
+
+    # ── Step 5: Post placeholder comment immediately ──────────────────────────
+    placeholder = github_controller.render_placeholder_comment(
+        relevant_files=relevant_files,
+        investigation_id=investigation_id
+    )
+
+    comment_id = github_controller.post_pr_comment(
+        github_token=gh_token,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        pr_number=pr_number,
+        comment_body=placeholder
+    ) or "0"
+
+    # ── Step 6: Queue background investigation ────────────────────────────────
+    background_tasks.add_task(
+        investigation_controller.run_pr_investigation,
+        investigation_id=investigation_id,
+        user_id=trusted_user_id,
+        connection_id=connection_id,
+        openmetadata_url=connection.openmetadata_host,
+        openmetadata_token=connection.openmetadata_token,
+        asset_fqn_map=asset_fqn_map,
+        pr_number=pr_number,
+        gh_token=gh_token,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        comment_id=comment_id
+    )
+
+    return {
+        "pr_number":        pr_number,
+        "analyzed":         True,
+        "investigation_id": investigation_id,
+        "relevant_files":   len(relevant_files),
+        "total_files":      len(all_changed),
+        "asset_fqns":       all_fqns,
+        "comment_id":       comment_id,
+        "message":          f"Analysis started for {len(relevant_files)} data file(s). Comment posted to PR."
+    }
+
+# ═════════════════════════════════════════════════════════════════════════════
+# OAUTH HELPERS (unchanged)
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _encode_state(data: dict) -> str:
     return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
@@ -120,7 +249,7 @@ async def _exchange_code(code: str) -> str:
                 "redirect_uri":  GITHUB_REDIRECT_URI,
             },
         )
-    data = resp.json()
+    data  = resp.json()
     token = data.get("access_token")
     if not token:
         raise HTTPException(400, f"Token exchange failed: {data.get('error_description', data)}")
@@ -132,8 +261,8 @@ async def _gh_get(url: str, token: str):
         resp = await client.get(
             url,
             headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
+                "Authorization":        f"Bearer {token}",
+                "Accept":               "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
@@ -156,7 +285,7 @@ async def _fetch_profile(token: str) -> GitHubOAuthProfile:
 
 async def _fetch_installations(token: str) -> list[GitHubInstallation]:
     data = await _gh_get(GITHUB_INSTALLATIONS_URL, token)
-    print(f"DEBUG _fetch_installations: raw response = {data}")  # ← add this
+    print(f"DEBUG _fetch_installations: raw response = {data}")
     result = []
     for inst in data.get("installations", []):
         account = inst.get("account", {})
@@ -175,7 +304,7 @@ async def _fetch_installations(token: str) -> list[GitHubInstallation]:
             app_slug=inst.get("app_slug"),
             repositories=repos,
         ))
-    print(f"DEBUG _fetch_installations: found {len(result)} installations")  # ← add this
+    print(f"DEBUG _fetch_installations: found {len(result)} installations")
     return result
 
 
@@ -209,127 +338,7 @@ def _split_repo(github_repo: Optional[str]) -> tuple[str, str]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PR WEBHOOK ROUTES
-# ═════════════════════════════════════════════════════════════════════════════
-
-@router.post("/webhook", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
-async def github_pr_webhook(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    x_hub_signature_256: str = Header(None),
-    x_github_event: str = Header(None),
-    connection_id: str = None,
-    user_id: str = None        # kept for routing but NOT trusted for ownership
-) -> dict:
-    if not connection_id or not user_id:
-        raise HTTPException(status_code=400, detail="connection_id and user_id are required")
-
-    raw_body = await request.body()
-
-    if not x_hub_signature_256:
-        raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")
-
-    if not github_controller.verify_github_signature(x_hub_signature_256, raw_body):
-        raise HTTPException(status_code=401, detail="Invalid GitHub signature")
-
-    try:
-        body    = json.loads(raw_body)
-        payload = PRWebhookEvent(**body)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
-
-    if x_github_event != "pull_request" or payload.action not in ("opened", "synchronize"):
-        return {"message": f"Ignoring event: {x_github_event}/{payload.action}"}
-
-    # FIX #7: derive user_id from connection document — never trust the query param
-    connection = connection_controller.get_connection_by_id(
-        connection_id=connection_id,
-        user_id=user_id
-    )
-    if not connection:
-        raise HTTPException(status_code=404, detail="Connection not found")
-
-    trusted_user_id = connection.user_id  # derived from DB, not from request
-
-    installation_id = str(
-        getattr(connection, "github_installation_id", None)
-        or (str(payload.installation["id"]) if payload.installation else None)
-        or "demo"
-    )
-
-    gh_token = github_controller.get_installation_token(installation_id)
-    if not gh_token:
-        raise HTTPException(status_code=401, detail="Failed to get GitHub App token.")
-
-    pr_number  = payload.pull_request.number
-    pr_url     = payload.pull_request.html_url
-    repo_owner = payload.repository.owner.login
-    repo_name  = payload.repository.name
-
-    changed_files = github_controller.parse_pr_diff(
-        github_token=gh_token,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        pr_number=pr_number
-    )
-
-    if not changed_files:
-        return {"pr_number": pr_number, "analyzed": False, "message": "No .sql or .yml files changed"}
-
-    primary_file  = changed_files[0].filename
-    primary_asset = primary_file.replace("/", ".").rstrip(".sql").rstrip(".yml").rstrip(".yaml")
-
-    investigation_id = investigation_controller.create_investigation(
-        user_id=trusted_user_id,
-        connection_id=connection_id,
-        event_id=f"github-{pr_number}",
-        failure_message=f"GitHub PR #{pr_number} ({pr_url}): Schema change detected in {primary_file}",
-        asset_fqn=primary_asset
-    )
-    if not investigation_id:
-        raise HTTPException(status_code=500, detail="Failed to create investigation")
-
-    initial_comment = (
-        f"## Pipeline Autopsy - analysis started\n\n"
-        f"Detected **{len(changed_files)} data file(s)** changed:\n"
-        + "\n".join(f"- `{f.filename}` ({f.status}, +{f.additions}/-{f.deletions})" for f in changed_files)
-        + f"\n\nRunning lineage impact analysis... (investigation `{investigation_id}`)"
-    )
-
-    comment_id = github_controller.post_pr_comment(
-        github_token=gh_token,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        pr_number=pr_number,
-        comment_body=initial_comment
-    ) or "0"
-
-    background_tasks.add_task(
-        run_investigation_and_update_pr,
-        investigation_id=investigation_id,
-        user_id=trusted_user_id,
-        connection_id=connection_id,
-        openmetadata_url=connection.openmetadata_host,
-        openmetadata_token=connection.openmetadata_token,
-        gh_token=gh_token,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        pr_number=pr_number,
-        comment_id=comment_id
-    )
-
-    return {
-        "pr_number":        pr_number,
-        "analyzed":         True,
-        "investigation_id": investigation_id,
-        "changed_files":    len(changed_files),
-        "comment_id":       comment_id,
-        "message":          "Analysis started. Comment posted to PR."
-    }
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# GITHUB OAUTH + APP REGISTRATION ROUTES
+# GITHUB OAUTH + APP REGISTRATION ROUTES (unchanged)
 # ═════════════════════════════════════════════════════════════════════════════
 
 @router.get("/oauth/start")
@@ -378,7 +387,6 @@ async def github_oauth_callback(
     except HTTPException:
         return RedirectResponse(f"{FRONTEND_ERROR_URL}?reason=github_api_failed")
 
-    # Always use the original user_id from state — never switch users mid-flow
     reg = GitHubAppRegistration(
         oauth_profile=profile,
         installations=installations,
@@ -394,7 +402,6 @@ async def github_oauth_callback(
             installation_id=installations[0].installation_id,
         )
 
-    # Issue a fresh JWT for the original user (not the GitHub-created one)
     fresh_token = auth_controller.create_access_token(
         user_id=user_id,
         email=user_id
@@ -408,6 +415,7 @@ async def github_oauth_callback(
         f"&installations={len(installations)}"
         f"&step=select_installation"
     )
+
 
 @router.post("/oauth/select-installation", response_model=dict)
 async def select_installation(
@@ -462,7 +470,6 @@ async def configure_webhook(
     if not reg.selected_installation_id:
         raise HTTPException(400, "No installation selected. Call /github/oauth/select-installation first.")
 
-    # FIX #5: extract repo_owner / repo_name from connection and pass to controller
     repo_owner, repo_name = _split_repo(raw.get("github_repo"))
 
     full_webhook_url = github_controller.build_webhook_url(
@@ -471,15 +478,15 @@ async def configure_webhook(
         api_base_url=API_BASE_URL
     )
 
-    installation_token = github_controller.get_installation_token(body.installation_id)
+    installation_token  = github_controller.get_installation_token(body.installation_id)
     registration_result = None
     registration_error  = None
 
     if installation_token:
         registration_result = github_controller.register_github_webhook(
             github_token=installation_token,
-            repo_owner=repo_owner,        # FIX #5
-            repo_name=repo_name,          # FIX #5
+            repo_owner=repo_owner,
+            repo_name=repo_name,
             webhook_url=full_webhook_url,
             webhook_secret=body.webhook_secret
         )
@@ -511,8 +518,8 @@ async def configure_webhook(
 
     if registration_result:
         response.update({
-            "status":  "success",
-            "message": "Webhook automatically registered with GitHub! PR events will now trigger analysis.",
+            "status":     "success",
+            "message":    "Webhook automatically registered with GitHub! PR events will now trigger analysis.",
             "webhook_id": registration_result.get("webhook_id"),
             "github_status": {
                 "url":    registration_result.get("url"),
@@ -631,8 +638,8 @@ async def cleanup_webhook(
     if not reg or not reg.selected_installation_id:
         return {
             "connection_id": connection_id,
-            "deleted": False,
-            "message": "No GitHub registration found, nothing to clean up"
+            "deleted":       False,
+            "message":       "No GitHub registration found, nothing to clean up"
         }
 
     repo_owner, repo_name = _split_repo(raw.get("github_repo"))
@@ -644,16 +651,16 @@ async def cleanup_webhook(
     if not selected_inst or not selected_inst.webhook_id:
         return {
             "connection_id": connection_id,
-            "deleted": False,
-            "message": "No webhook_id stored, nothing to clean up"
+            "deleted":       False,
+            "message":       "No webhook_id stored, nothing to clean up"
         }
 
     installation_token = github_controller.get_installation_token(reg.selected_installation_id)
     if not installation_token:
         return {
             "connection_id": connection_id,
-            "deleted": False,
-            "message": "Could not get GitHub App token for cleanup"
+            "deleted":       False,
+            "message":       "Could not get GitHub App token for cleanup"
         }
 
     success = github_controller.delete_github_webhook(
@@ -675,6 +682,6 @@ async def cleanup_webhook(
 
     return {
         "connection_id": connection_id,
-        "deleted": success,
-        "message": "Webhook deleted from GitHub" if success else "Failed to delete webhook from GitHub"
+        "deleted":       success,
+        "message":       "Webhook deleted from GitHub" if success else "Failed to delete webhook from GitHub"
     }

@@ -58,7 +58,6 @@ from .investigations import (
 from .github import (
     ChangedAsset,
     PRWebhookEvent,
-    ImpactedAsset,
     PRAnalysis,
     PRAnalysisInDB,
 )
@@ -90,7 +89,7 @@ __all__ = [
     "SuggestedFix", "RootCause",
     "InvestigationInDB", "InvestigationResponse", "InvestigationListItem",
     # github
-    "ChangedAsset", "PRWebhookEvent", "ImpactedAsset", "PRAnalysis", "PRAnalysisInDB",
+    "ChangedAsset", "PRWebhookEvent", "PRAnalysis", "PRAnalysisInDB",
     # chat
     "ChatMessage", "ChatSessionInDB", "ChatSessionResponse",
     "ChatSessionListItem", "ChatQueryRequest", "ChatQueryResponse",
