@@ -71,11 +71,28 @@ class LineageNode(BaseModel):
     # Set by the traversal engine
     depth_from_failure: int = Field(
         0,
-        description="0 = the failing asset, 1 = direct upstream, etc."
+        description=(
+            "0 = the changed asset itself, "
+            "positive = upstream ancestor (1 = direct parent, 2 = grandparent, …), "
+            "negative = downstream consumer (-1 = direct consumer, -2 = further downstream)"
+        )
     )
     is_break_point: bool = Field(
         False,
         description="True if this is the node where the schema break originated"
+    )
+    # NEW: explicitly marks nodes that are downstream consumers of the changed asset.
+    # Set by traverse_upstream when a node appears in downstreamEdges of the
+    # OpenMetadata response. These are the assets that CONSUME the changed asset
+    # and are therefore at risk of breaking. Used by build_downstream_context to
+    # decide which nodes to fetch SQL for.
+    is_downstream: bool = Field(
+        False,
+        description=(
+            "True if this node is a downstream consumer of the changed/failing asset. "
+            "False for upstream ancestors and the primary asset itself. "
+            "Defaults to False so existing MongoDB documents deserialise cleanly."
+        )
     )
     schema_diff: Optional[SchemaDiff] = None
     severity: Optional[SeverityLevel] = None
@@ -112,7 +129,7 @@ class LineageSubgraph(BaseModel):
     nodes: List[LineageNode] = Field(default_factory=list)
     edges: List[LineageEdge] = Field(default_factory=list)
     traversal_depth: int = Field(
-        0, description="How many hops upstream we walked"
+        0, description="How many hops upstream/downstream we walked"
     )
 
     @computed_field
@@ -132,5 +149,9 @@ class LineageSubgraph(BaseModel):
     @computed_field
     @property
     def affected_asset_fqns(self) -> List[str]:
-        """All downstream assets that will be broken by the root cause."""
-        return [n.fqn for n in self.nodes if not n.is_break_point]
+        """
+        FQNs of downstream consumer assets that will be broken by the root cause.
+        Uses is_downstream flag — only nodes explicitly tagged as consumers,
+        not upstream ancestors.
+        """
+        return [n.fqn for n in self.nodes if n.is_downstream]

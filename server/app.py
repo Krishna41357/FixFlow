@@ -55,6 +55,8 @@ from routes.events import router as events_router
 from routes.investigations import router as investigations_router
 from routes.chats import router as chats_router
 from routes.github import router as github_router
+from routes.repo_parser_routes import router as repo_parser_router
+
 
 # ============================================================================
 # Register Routers
@@ -65,6 +67,7 @@ app.include_router(events_router, prefix="/api/v1")
 app.include_router(investigations_router, prefix="/api/v1")
 app.include_router(chats_router, prefix="/api/v1")
 app.include_router(github_router, prefix="/api/v1")
+app.include_router(repo_parser_router, prefix="/api/v1")
 
 # ============================================================================
 # Health Check Endpoints

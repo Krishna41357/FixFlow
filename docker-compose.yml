@@ -70,6 +70,13 @@
       retries: 3
       start_period: 15s
 
+  redis:
+    image : redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
   # ===== OPENMETADATA DEPENDENCIES =====
   postgresql:
     image: postgres:13
@@ -198,3 +205,4 @@ volumes:
     driver: local
   elasticsearch_data:
     driver: local
+

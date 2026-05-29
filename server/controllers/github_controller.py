@@ -8,10 +8,11 @@ Function organisation:
   4. Webhook lifecycle            — register / update / delete / verify
   5. PR file filtering            — _is_relevant_yml, filter_relevant_files
   6. FQN extraction               — _extract_fqn_from_sql, _extract_fqn_from_yml,
-                                    _strip_context_lines, derive_fqns
-  7. PR diff parsing              — parse_pr_diff (unchanged)
-  8. PR comment renderer          — render_pr_comment (new), render_placeholder_comment
-  9. PR comment posting/updating  — post_pr_comment, update_pr_comment (unchanged)
+                                    strip_context_lines, derive_fqns
+  7. PR diff parsing              — parse_pr_diff
+  8. PR comment renderer          — render_pr_comment, render_placeholder_comment
+  9. PR comment posting/updating  — post_pr_comment, update_pr_comment
+ 10. Downstream SQL fetching      — search_file_in_repo, fetch_file_content
 """
 
 import os
@@ -19,6 +20,7 @@ import re
 import hmac
 import hashlib
 import time
+import base64
 import requests
 from typing import List, Optional, Dict, Tuple
 from datetime import datetime, timezone
@@ -323,19 +325,16 @@ def _is_relevant_yml(filename: str, patch: Optional[str]) -> bool:
       3. Fall back to patch content scan for dbt-specific keys → bool
       4. If patch unavailable and path is ambiguous → False (conservative)
     """
-    # Step 1 — reject known irrelevant directories
     for irrelevant in _DBT_IRRELEVANT_DIRS:
         if filename.startswith(irrelevant) or f"/{irrelevant.rstrip('/')}" in filename:
             print(f"DEBUG _is_relevant_yml: Rejected {filename} (irrelevant dir)")
             return False
 
-    # Step 2 — accept known dbt directories immediately
     for relevant in _DBT_RELEVANT_DIRS:
         if filename.startswith(relevant) or f"/{relevant.rstrip('/')}" in filename:
             print(f"DEBUG _is_relevant_yml: Accepted {filename} (dbt dir)")
             return True
 
-    # Step 3 — ambiguous path: scan patch content for dbt keys
     if patch:
         if _DBT_YML_KEYS.search(patch):
             print(f"DEBUG _is_relevant_yml: Accepted {filename} (dbt content keys found in patch)")
@@ -344,7 +343,6 @@ def _is_relevant_yml(filename: str, patch: Optional[str]) -> bool:
             print(f"DEBUG _is_relevant_yml: Rejected {filename} (no dbt keys in patch)")
             return False
 
-    # Step 4 — no patch, ambiguous path: conservative reject
     print(f"DEBUG _is_relevant_yml: Rejected {filename} (ambiguous path, no patch to inspect)")
     return False
 
@@ -354,8 +352,6 @@ def filter_relevant_files(changed_assets: List[ChangedAsset]) -> List[ChangedAss
     Returns only the ChangedAssets that warrant lineage analysis:
       - All .sql files
       - .yml/.yaml files that pass _is_relevant_yml
-
-    Preserves original order.
     """
     relevant = []
     for asset in changed_assets:
@@ -372,25 +368,29 @@ def filter_relevant_files(changed_assets: List[ChangedAsset]) -> List[ChangedAss
 
 # ── 6. FQN extraction ─────────────────────────────────────────────────────────
 
-def _strip_context_lines(patch: Optional[str]) -> str:
+def strip_context_lines(patch: Optional[str]) -> str:
     """
     Removes unchanged context lines from a unified diff patch.
     Keeps only lines starting with + or - (excluding the +++ / --- file headers).
     Returns empty string if patch is None.
+
+    Public function — called by routes directly and internally by derive_fqns.
     """
     if not patch:
         return ""
 
     changed_lines = []
     for line in patch.splitlines():
-        # Skip file headers (+++ and ---)
         if line.startswith("+++") or line.startswith("---"):
             continue
-        # Keep actual additions and deletions
         if line.startswith("+") or line.startswith("-"):
             changed_lines.append(line)
 
     return "\n".join(changed_lines)
+
+
+# Private alias so internal callers (_warn_large_patch, derive_fqns) are unchanged
+_strip_context_lines = strip_context_lines
 
 
 def _warn_large_patch(filename: str, stripped_patch: str) -> None:
@@ -410,17 +410,10 @@ def _extract_fqn_from_sql(filename: str) -> str:
     models/finance/revenue.sql        → finance.revenue
     seeds/raw/users.sql               → raw.users
     snapshots/finance/snap_orders.sql → finance.snap_orders
-
-    Strategy: drop the first path segment (dbt directory prefix) and extension,
-    then join remaining segments with dots.
     """
-    # Remove extension
     without_ext = filename.removesuffix(".sql")
-
-    # Split path into segments
     parts = without_ext.replace("\\", "/").split("/")
 
-    # Drop known dbt top-level directory prefix if present
     dbt_top_dirs = {"models", "seeds", "snapshots", "analyses", "macros"}
     if parts and parts[0] in dbt_top_dirs:
         parts = parts[1:]
@@ -434,18 +427,10 @@ def _extract_fqn_from_yml(filename: str, patch: Optional[str]) -> Tuple[List[str
 
     Returns:
         (fqns, fqn_approximate)
-        fqns            — list of FQNs, one per model/source name found in the patch.
+        fqns            — list of FQNs, one per model/source name found in patch.
                           Always at least one entry (fallback to path-based).
         fqn_approximate — True if patch parsing failed and we fell back to path only.
-
-    Strategy:
-      1. Extract domain from path (directory segment after dbt prefix)
-      2. Scan stripped patch for ALL `- name: <model_name>` entries under
-         models:/sources: blocks — a schema yml can define multiple models
-      3. Combine each as `domain.model_name`
-      4. If patch parse finds nothing → path-based fallback, mark as approximate
     """
-    # Extract domain from path
     without_ext = filename.removesuffix(".yaml").removesuffix(".yml")
     parts = without_ext.replace("\\", "/").split("/")
 
@@ -453,34 +438,25 @@ def _extract_fqn_from_yml(filename: str, patch: Optional[str]) -> Tuple[List[str
     if parts and parts[0] in dbt_top_dirs:
         parts = parts[1:]
 
-    # Domain = directory segments only (everything except the filename itself)
     domain_parts = parts[:-1] if len(parts) > 1 else parts
     domain = ".".join(domain_parts) if domain_parts else ""
 
-    # Attempt patch content scan — extract model/source names only (not column names)
-    # Use FULL patch (not stripped) to find model definitions, since model lines
-    # might be context (unchanged) and thus removed from the stripped patch
     if patch:
         lines = patch.split("\n")
         fqns: List[str] = []
         seen: set = set()
-        
+
         for line in lines:
-            # Skip file headers
             if line.startswith("+++") or line.startswith("---"):
                 continue
-            
-            # Get the content (remove diff markers and leading/trailing whitespace)
+
             content = line
             if content.startswith("+") or content.startswith("-"):
                 content = content[1:]
-            
-            # Count leading spaces to determine hierarchy level
+
             stripped_content = content.lstrip()
             leading_spaces = len(content) - len(stripped_content)
-            
-            # Match `- name: model_name` at model/source level (2-4 spaces typically)
-            # NOT at column level (6+ spaces)
+
             if leading_spaces <= 4 and re.match(r"^-\s+name:\s+(\S+)", stripped_content):
                 match = re.match(r"^-\s+name:\s+(\S+)", stripped_content)
                 if match:
@@ -489,7 +465,7 @@ def _extract_fqn_from_yml(filename: str, patch: Optional[str]) -> Tuple[List[str
                     if fqn not in seen:
                         seen.add(fqn)
                         fqns.append(fqn)
-        
+
         if fqns:
             print(
                 f"DEBUG _extract_fqn_from_yml: Extracted {len(fqns)} FQN(s) "
@@ -497,7 +473,6 @@ def _extract_fqn_from_yml(filename: str, patch: Optional[str]) -> Tuple[List[str
             )
             return fqns, False
 
-    # Fallback — path-based approximation (single entry)
     file_stem = parts[-1] if parts else without_ext
     fqn = f"{domain}.{file_stem}" if domain else file_stem
     print(
@@ -513,25 +488,18 @@ def derive_fqns(
     """
     Derives FQNs for all relevant changed files.
 
-    For .sql files: one entry per file (filename → (fqn, False))
-    For .yml files: one entry per model name found in the patch.
-                    A yml defining 3 models produces 3 entries, each keyed
-                    as `{filename}::{model_name}` to avoid key collisions.
-
     Returns:
         Dict mapping key → (fqn, fqn_approximate)
 
         Key format:
-          .sql  → original filename     e.g. "models/finance/revenue.sql"
-          .yml  → "filename::model_fqn" e.g. "models/finance/schema.yml::finance.orders"
-
-        fqn_approximate=True for yml files where patch parsing failed (path fallback used).
+          .sql  → original filename
+          .yml  → "filename::model_fqn" when multiple models in one file
     """
     result: Dict[str, Tuple[str, bool]] = {}
 
     for asset in relevant_assets:
         filename = asset.filename
-        stripped = _strip_context_lines(asset.patch)
+        stripped = strip_context_lines(asset.patch)
         _warn_large_patch(filename, stripped)
 
         if filename.endswith(".sql"):
@@ -542,10 +510,8 @@ def derive_fqns(
             fqns, approximate = _extract_fqn_from_yml(filename, asset.patch)
 
             if len(fqns) == 1:
-                # Single model — use filename as key directly for clean display
                 result[filename] = (fqns[0], approximate)
             else:
-                # Multiple models — suffix key with model FQN to avoid collisions
                 for fqn in fqns:
                     composite_key = f"{filename}::{fqn}"
                     result[composite_key] = (fqn, approximate)
@@ -562,10 +528,7 @@ def parse_pr_diff(
     repo_name: str,
     pr_number: int
 ) -> List[ChangedAsset]:
-    """
-    Fetches all changed files for a PR and returns as ChangedAsset list.
-    Filtering is done separately via filter_relevant_files.
-    """
+    """Fetches all changed files for a PR and returns as ChangedAsset list."""
     try:
         url     = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls/{pr_number}/files"
         headers = {
@@ -611,10 +574,7 @@ def render_placeholder_comment(
     relevant_files: List[ChangedAsset],
     investigation_id: str
 ) -> str:
-    """
-    Initial comment posted immediately when the PR webhook fires.
-    Updated later by render_pr_comment once analysis is complete.
-    """
+    """Initial comment posted immediately when the PR webhook fires."""
     file_lines = "\n".join(
         f"- `{f.filename}` ({f.status}, +{f.additions}/-{f.deletions})"
         for f in relevant_files
@@ -635,14 +595,13 @@ def render_pr_comment(
     Renders the full PR comment from a completed PRRootCause analysis.
 
     Structure:
-      Header          — summary, severity, safe-to-merge verdict
-      What Changed    — table of all changed assets with patch evidence
-      Downstream      — per-asset blocks with per-cause errors and fixes
-      Footer          — confidence, investigation ID
+      Header       — summary, severity, safe-to-merge verdict
+      What Changed — table of all changed assets with patch evidence
+      Downstream   — per-asset blocks with per-cause errors and fixes
+      Footer       — confidence, investigation ID
     """
     lines: List[str] = []
 
-    # ── Header ────────────────────────────────────────────────────────────────
     severity_emoji = _SEVERITY_EMOJI.get(pr_root_cause.overall_severity, "⚪")
     merge_verdict  = "✅ Safe to merge" if pr_root_cause.safe_to_merge else "❌ Do NOT merge"
 
@@ -661,13 +620,11 @@ def render_pr_comment(
         "",
     ]
 
-    # ── What Changed ──────────────────────────────────────────────────────────
     lines += ["---", "", "### 📝 What Changed", ""]
     lines += ["| Asset | Change | Evidence |", "|---|---|---|"]
 
     for asset in pr_root_cause.changed_assets:
         approx_flag = " *(approx)*" if asset.fqn_approximate else ""
-        # Escape pipe characters in patch evidence for markdown table safety
         evidence = asset.patch_evidence.replace("|", "\\|").replace("\n", " · ")
         lines.append(
             f"| `{asset.fqn}`{approx_flag} | {asset.change_type} — {asset.change_description} | `{evidence}` |"
@@ -675,7 +632,6 @@ def render_pr_comment(
 
     lines.append("")
 
-    # ── Downstream Breakage ───────────────────────────────────────────────────
     if pr_root_cause.downstream_impacts:
         lines += ["---", "", "### 💥 Downstream Breakage", ""]
 
@@ -716,7 +672,6 @@ def render_pr_comment(
             "",
         ]
 
-    # ── Footer ────────────────────────────────────────────────────────────────
     lines += [
         "---",
         "",
@@ -781,3 +736,131 @@ def update_pr_comment(
     except Exception as e:
         print(f"ERROR update_pr_comment: {e}")
         return False
+
+
+# ── 10. Downstream SQL fetching ───────────────────────────────────────────────
+
+def search_file_in_repo(
+    github_token: str,
+    repo_owner: str,
+    repo_name: str,
+    asset_name: str
+) -> Optional[str]:
+    """
+    Searches the repo for a SQL file matching the asset name (last FQN segment).
+
+    Uses GitHub code search API:
+      GET /search/code?q={name}+repo:{owner}/{repo}+extension:sql
+
+    Prefers files in known dbt directories. Falls back to first exact stem match.
+    Returns the file path or None if not found.
+
+    Rate limit: 30 req/min (authenticated). Called concurrently from
+    build_downstream_context — capped at MAX_DOWNSTREAM_SQL_FETCHES to stay safe.
+    """
+    if not asset_name:
+        return None
+
+    try:
+        search_name = asset_name.split(".")[-1]
+
+        url = "https://api.github.com/search/code"
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept":        "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        params = {
+            "q": f"{search_name}+repo:{repo_owner}/{repo_name}+extension:sql",
+            "per_page": 10,
+        }
+
+        print(f"DEBUG search_file_in_repo: Searching for {search_name} in {repo_owner}/{repo_name}")
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+
+        if response.status_code == 403:
+            print(f"WARNING search_file_in_repo: 403 for {search_name} — rate limited or missing scope")
+            return None
+
+        if response.status_code != 200:
+            print(f"ERROR search_file_in_repo: Status {response.status_code} for {search_name}")
+            return None
+
+        items = response.json().get("items", [])
+        if not items:
+            print(f"DEBUG search_file_in_repo: No results for {search_name} in repo")
+            return None
+
+        dbt_dirs = ("models/", "seeds/", "snapshots/", "analyses/")
+        for item in items:
+            path = item.get("path", "")
+            stem = path.split("/")[-1].removesuffix(".sql")
+            if stem == search_name:
+                for dbt_dir in dbt_dirs:
+                    if path.startswith(dbt_dir):
+                        print(f"DEBUG search_file_in_repo: Found dbt match {path}")
+                        return path
+
+        for item in items:
+            path = item.get("path", "")
+            stem = path.split("/")[-1].removesuffix(".sql")
+            if stem == search_name:
+                print(f"DEBUG search_file_in_repo: Found fallback match {path}")
+                return path
+
+        print(f"DEBUG search_file_in_repo: No exact stem match for {search_name}")
+        return None
+
+    except Exception as e:
+        print(f"ERROR search_file_in_repo: {e}")
+        return None
+
+
+def fetch_file_content(
+    github_token: str,
+    repo_owner: str,
+    repo_name: str,
+    file_path: str
+) -> Optional[str]:
+    """
+    Fetches raw content of a file via GitHub Contents API.
+      GET /repos/{owner}/{repo}/contents/{path}
+
+    Decodes base64 content and returns as plain string.
+    Returns None if file not found or fetch fails.
+    """
+    if not file_path:
+        return None
+
+    try:
+        url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept":        "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        print(f"DEBUG fetch_file_content: Fetching {file_path} from {repo_owner}/{repo_name}")
+        response = requests.get(url, headers=headers, timeout=15)
+
+        if response.status_code == 404:
+            print(f"DEBUG fetch_file_content: File not found: {file_path}")
+            return None
+
+        if response.status_code != 200:
+            print(f"ERROR fetch_file_content: Status {response.status_code} for {file_path}")
+            return None
+
+        data = response.json()
+        raw_content = data.get("content", "")
+        if not raw_content:
+            print(f"DEBUG fetch_file_content: Empty content for {file_path}")
+            return None
+
+        decoded = base64.b64decode(raw_content.replace("\n", "")).decode("utf-8", errors="replace")
+        print(f"DEBUG fetch_file_content: Fetched {len(decoded)} chars from {file_path}")
+        return decoded
+
+    except Exception as e:
+        print(f"ERROR fetch_file_content: {e}")
+        return None

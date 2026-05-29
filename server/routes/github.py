@@ -116,11 +116,8 @@ async def github_pr_webhook(
     trusted_user_id = connection.user_id
 
     # ── Gate 8: GitHub token ──────────────────────────────────────────────────
-    installation_id = str(
-        getattr(connection, "github_installation_id", None)
-        or payload.installation.get("id")
-        or "demo"
-    )
+    # With this — always trust the stored installation_id:
+    installation_id = str(connection.github_installation_id or "demo")
 
     gh_token = github_controller.get_installation_token(installation_id)
     if not gh_token:
@@ -160,8 +157,8 @@ async def github_pr_webhook(
     for key, (fqn, approximate) in raw_fqn_map.items():
         base_filename = key.split("::")[0]
         asset = filename_to_asset.get(base_filename)
-        stripped_patch = github_controller._strip_context_lines(
-        asset.patch if asset else None
+        stripped_patch = github_controller.strip_context_lines(
+            asset.patch if asset else None
         )
         asset_fqn_map[key] = (fqn, approximate, stripped_patch)
 
@@ -204,14 +201,14 @@ async def github_pr_webhook(
         investigation_id=investigation_id,
         user_id=trusted_user_id,
         connection_id=connection_id,
-        openmetadata_url=connection.openmetadata_host,
-        openmetadata_token=connection.openmetadata_token,
         asset_fqn_map=asset_fqn_map,
         pr_number=pr_number,
         gh_token=gh_token,
         repo_owner=repo_owner,
         repo_name=repo_name,
-        comment_id=comment_id
+        comment_id=comment_id,
+        openmetadata_url=connection.openmetadata_host,
+        openmetadata_token=connection.openmetadata_token
     )
 
     return {
@@ -358,7 +355,7 @@ async def github_oauth_start(
         f"{GITHUB_AUTHORIZE_URL}"
         f"?client_id={GITHUB_CLIENT_ID}"
         f"&redirect_uri={GITHUB_REDIRECT_URI}"
-        f"&scope=read:org,repo"
+        f"&scope=read:user,read:org,repo"
         f"&state={state}"
     )
     return RedirectResponse(url=url)
@@ -488,7 +485,7 @@ async def configure_webhook(
             repo_owner=repo_owner,
             repo_name=repo_name,
             webhook_url=full_webhook_url,
-            webhook_secret=body.webhook_secret
+            webhook_secret=os.getenv("GITHUB_WEBHOOK_SECRET")
         )
         if not registration_result:
             registration_error = "Failed to register webhook with GitHub API. See logs."

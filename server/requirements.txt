@@ -12,6 +12,7 @@ python-dotenv==1.0.0
 
 # ===== DATABASE =====
 pymongo>=4.6.0          # ✅ fixed: 4.15.2 doesn't exist, 4.6.0+ works on py3.11
+redis>=4.6.0
 
 # ===== AUTHENTICATION & SECURITY =====
 python-jose[cryptography]==3.3.0

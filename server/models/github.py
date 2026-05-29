@@ -32,7 +32,7 @@ class PRWebhookEvent(BaseModel):
     Contains parsed payload from GitHub's pull_request webhook.
     """
     action: str                           # opened | synchronize | closed | etc.
-    installation: Dict[str, Any]          # {"id": 12345, ...}
+    installation: Dict[str, Any] = {}     # {"id": 12345, ...} optional
     repository: Dict[str, Any]            # {"name": ..., "full_name": ..., "owner": ...}
     pull_request: Dict[str, Any]          # {"number": ..., "title": ..., ...}
 
@@ -284,7 +284,7 @@ class GitHubWebhookConfigRequest(BaseModel):
     connection_id: str
     installation_id: str
     webhook_url: str
-    webhook_secret: str
+    webhook_secret: Optional[str] = None
 
 
 class GitHubRegistrationStatusResponse(BaseModel):

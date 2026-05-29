@@ -14,10 +14,15 @@ Function organisation:
   call_ai_layer                 — LLM call returning RootCause
   _call_groq / _call_openai / _call_claude  — provider adapters
 
-  ── PR bot investigation flow (new) ──────────────────────────────────────────
+  ── PR bot investigation flow ─────────────────────────────────────────────────
   merge_lineage_subgraphs       — merges N subgraphs, deduplicates nodes by FQN,
                                   tracks which upstream asset each node came from
-  build_pr_ai_context           — prompt builder for multi-asset PR flow
+  build_downstream_context      — orchestrates Layer 2 + Layer 3 fetching
+                                  concurrently via ThreadPoolExecutor.
+                                  Layer 2: schema of each changed asset (OpenMetadata)
+                                  Layer 3: SQL of each downstream consumer (GitHub repo)
+  build_pr_ai_context           — prompt builder for multi-asset PR flow, accepts
+                                  downstream_context with Layer 2 + Layer 3 data
   call_pr_ai_layer              — LLM call returning PRRootCause
   run_pr_investigation          — entry point called by the PR webhook background task
 
@@ -32,6 +37,7 @@ Reuse policy:
 import os
 import json
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Dict, Tuple
 from datetime import datetime, timezone
 from pymongo import MongoClient
@@ -46,8 +52,6 @@ from models.github import (
     PRRootCause, ChangedAssetSummary, DownstreamImpact,
     AssetCause, ErrorLocation, CauseFix, ChangedAsset
 )
-# PRRootCause also used in _deserialise_pr_root_cause (lazy import inside function
-# to avoid circular import at module load time)
 from models.events import AffectedAsset
 from models.base import InvestigationStatus, SeverityLevel
 from models.lineage import LineageSubgraph, LineageNode, LineageEdge
@@ -67,6 +71,11 @@ OPENAI_API_KEY       = os.getenv("OPENAI_API_KEY", "")
 CLAUDE_API_KEY       = os.getenv("CLAUDE_API_KEY", "")
 AI_MODEL             = os.getenv("AI_MODEL", "claude-sonnet-4-20250514")
 DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "groq")
+USE_OPENMETADATA = os.getenv("USE_OPENMETADATA", "false").lower() == "true"
+
+# Maximum downstream nodes to fetch SQL for — protects against token overflow.
+# 20 nodes × 150 lines × ~4 chars = ~12k tokens max for the SQL section.
+MAX_DOWNSTREAM_SQL_FETCHES = 20
 
 
 # ── Shared utilities ──────────────────────────────────────────────────────────
@@ -77,7 +86,7 @@ def create_investigation(
     event_id: str,
     failure_message: str,
     asset_fqn: Optional[str] = None,
-    event_type: str = "manual"          # FIX 3: caller sets the correct type
+    event_type: str = "manual"
 ) -> Optional[str]:
     if not user_id or not connection_id or not event_id:
         print("ERROR create_investigation: Missing required fields")
@@ -91,7 +100,7 @@ def create_investigation(
             "status":             InvestigationStatus.PENDING,
             "failure_message":    failure_message,
             "failing_asset_fqn":  asset_fqn or failure_message.split(":")[0].strip(),
-            "event_type":         event_type,   # FIX 3: stored as passed in
+            "event_type":         event_type,
             "lineage_subgraph":   None,
             "root_cause":         None,
             "pr_root_cause":      None,
@@ -574,7 +583,7 @@ def _call_claude(prompt: str) -> Optional[dict]:
         return None
 
 
-# ── PR bot investigation flow (new) ──────────────────────────────────────────
+# ── PR bot investigation flow ──────────────────────────────────────────────────
 
 def merge_lineage_subgraphs(
     subgraphs: List[Tuple[str, LineageSubgraph]]
@@ -582,22 +591,17 @@ def merge_lineage_subgraphs(
     """
     Merges multiple per-asset lineage subgraphs into one unified subgraph.
 
-    Args:
-        subgraphs: List of (source_fqn, LineageSubgraph) tuples.
-                   source_fqn is the PR-changed asset that this subgraph
-                   was traversed from.
-
     Behaviour:
-      - Nodes are deduplicated by FQN — first occurrence wins for base fields.
-      - Each node gains a `raw_metadata["source_assets"]` list tracking which
-        upstream PR-changed assets it was reached from. This powers the
-        `caused_by` tracing in the PR comment.
-      - Edges are deduplicated by (from_fqn, to_fqn) pair.
-      - traversal_depth is the max across all subgraphs.
-      - failing_asset_fqn is set to a comma-separated list of all source FQNs.
+      - Nodes deduplicated by FQN — first occurrence wins for base fields.
+      - Each node gains raw_metadata["source_assets"] tracking which PR-changed
+        asset it was reached from.
+      - is_downstream flag is preserved: if ANY subgraph marks the node as a
+        downstream consumer, it stays marked as downstream in the merged graph.
+      - Severity escalates to highest across subgraphs for the same node.
+      - Edges deduplicated by (from_fqn, to_fqn) pair.
     """
-    seen_nodes: Dict[str, LineageNode] = {}       # fqn → node
-    seen_edges: set = set()                        # (from_fqn, to_fqn)
+    seen_nodes: Dict[str, LineageNode] = {}
+    seen_edges: set = set()
     merged_edges: List[LineageEdge] = []
     max_depth = 0
 
@@ -606,18 +610,22 @@ def merge_lineage_subgraphs(
 
         for node in subgraph.nodes:
             if node.fqn not in seen_nodes:
-                # First time we see this node — store it and annotate source
                 node.raw_metadata["source_assets"] = [source_fqn]
                 seen_nodes[node.fqn] = node
             else:
-                # Node already seen from another upstream asset — append source
                 existing = seen_nodes[node.fqn]
                 sources = existing.raw_metadata.get("source_assets", [])
                 if source_fqn not in sources:
                     sources.append(source_fqn)
                 existing.raw_metadata["source_assets"] = sources
 
-                # Escalate severity if new traversal found it more severe
+                # Preserve is_downstream: once a node is tagged as a consumer
+                # in any subgraph, keep it tagged
+                if node.is_downstream:
+                    existing.is_downstream = True
+                    existing.depth_from_failure = -1
+
+                # Escalate severity
                 if node.severity and existing.severity:
                     severity_rank = {
                         SeverityLevel.LOW: 0, SeverityLevel.MEDIUM: 1,
@@ -641,61 +649,249 @@ def merge_lineage_subgraphs(
         traversal_depth=max_depth
     )
 
+    downstream_count = sum(1 for n in merged.nodes if n.is_downstream)
     print(
         f"DEBUG merge_lineage_subgraphs: "
-        f"{len(merged.nodes)} unique nodes, {len(merged.edges)} unique edges "
-        f"from {len(subgraphs)} subgraphs"
+        f"{len(merged.nodes)} unique nodes ({downstream_count} downstream consumers), "
+        f"{len(merged.edges)} unique edges from {len(subgraphs)} subgraphs"
     )
     return merged
 
 
+# ── build_downstream_context ───────────────────────────────────────────────────
+
+def build_downstream_context(
+    openmetadata_url: str,
+    openmetadata_token: str,
+    github_token: str,
+    repo_owner: str,
+    repo_name: str,
+    asset_fqn_map: Dict[str, Tuple[str, bool, str]],
+    merged_subgraph: LineageSubgraph
+) -> dict:
+    """
+    Orchestrates concurrent fetching of Layer 2 and Layer 3 context.
+
+    Layer 2 — Current schema of each CHANGED asset (from OpenMetadata).
+      For every FQN in asset_fqn_map, fetches the current column list so the
+      AI knows the exact contract the PR is potentially breaking.
+
+    Layer 3 — SQL of each DOWNSTREAM CONSUMER node (from GitHub repo).
+      For every node in merged_subgraph where is_downstream=True, searches
+      the repo for its SQL file and fetches the content so the AI can check
+      which columns it references.
+
+      Only nodes with is_downstream=True are fetched — these are the actual
+      consumers of the changed asset (tagged by traverse_upstream from
+      downstreamEdges). Upstream ancestors are excluded.
+
+      Capped at MAX_DOWNSTREAM_SQL_FETCHES (20) to prevent token overflow.
+
+    All fetches run concurrently via ThreadPoolExecutor — no sequential waiting.
+
+    Returns:
+      {
+        "changed_asset_schemas": { fqn: [{"name": "col", "dataType": "INT"}, ...] },
+        "downstream_sqls":       { fqn: "SELECT ..." | None }
+      }
+
+    None values in downstream_sqls mean the SQL file could not be located
+    in the repo (external asset, BI tool, different repo, etc.) — the AI
+    will reason from lineage context only for those.
+    """
+    from controllers.github_controller import search_file_in_repo, fetch_file_content
+
+    # Layer 2: changed asset FQNs (deduplicated)
+    changed_fqns = list({fqn for (fqn, _, _) in asset_fqn_map.values()})
+
+    # Layer 3: downstream consumer FQNs only — is_downstream=True nodes
+    # These are the assets that actually CONSUME the changed asset.
+    # Capped to avoid token overflow.
+    all_downstream_fqns = [
+        node.fqn
+        for node in merged_subgraph.nodes
+        if node.is_downstream
+    ]
+
+    if len(all_downstream_fqns) > MAX_DOWNSTREAM_SQL_FETCHES:
+        print(
+            f"WARNING build_downstream_context: {len(all_downstream_fqns)} downstream consumers — "
+            f"capping at {MAX_DOWNSTREAM_SQL_FETCHES} to avoid token overflow"
+        )
+        downstream_fqns = all_downstream_fqns[:MAX_DOWNSTREAM_SQL_FETCHES]
+    else:
+        downstream_fqns = all_downstream_fqns
+
+    changed_asset_schemas: Dict[str, List[dict]] = {}
+    downstream_sqls: Dict[str, Optional[str]] = {}
+
+    print(
+        f"DEBUG build_downstream_context: "
+        f"Fetching schemas for {len(changed_fqns)} changed assets, "
+        f"SQL for {len(downstream_fqns)} downstream consumers"
+    )
+
+    # ── Concurrent fetch ───────────────────────────────────────────────────────
+    def _fetch_schema(fqn: str) -> Tuple[str, List[dict]]:
+        schema = lineage_controller.fetch_asset_schema(
+            openmetadata_url, openmetadata_token, fqn
+        )
+        return fqn, schema
+
+    def _fetch_downstream_sql(fqn: str) -> Tuple[str, Optional[str]]:
+        file_path = search_file_in_repo(github_token, repo_owner, repo_name, fqn)
+        if not file_path:
+            print(f"DEBUG build_downstream_context: SQL not found in repo for {fqn}")
+            return fqn, None
+        content = fetch_file_content(github_token, repo_owner, repo_name, file_path)
+        return fqn, content
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        schema_futures = {
+            executor.submit(_fetch_schema, fqn): ("schema", fqn)
+            for fqn in changed_fqns
+        }
+        sql_futures = {
+            executor.submit(_fetch_downstream_sql, fqn): ("sql", fqn)
+            for fqn in downstream_fqns
+        }
+        all_futures = {**schema_futures, **sql_futures}
+
+        for future in as_completed(all_futures):
+            task_type, fqn = all_futures[future]
+            try:
+                result_fqn, result_value = future.result()
+                if task_type == "schema":
+                    changed_asset_schemas[result_fqn] = result_value
+                else:
+                    downstream_sqls[result_fqn] = result_value
+            except Exception as e:
+                print(f"ERROR build_downstream_context: Task failed for {fqn} ({task_type}): {e}")
+                if task_type == "schema":
+                    changed_asset_schemas[fqn] = []
+                else:
+                    downstream_sqls[fqn] = None
+
+    # Ensure every FQN has an entry even if its future errored out
+    for fqn in changed_fqns:
+        changed_asset_schemas.setdefault(fqn, [])
+    for fqn in downstream_fqns:
+        downstream_sqls.setdefault(fqn, None)
+
+    fetched_schemas = sum(1 for v in changed_asset_schemas.values() if v)
+    fetched_sqls    = sum(1 for v in downstream_sqls.values() if v)
+    print(
+        f"DEBUG build_downstream_context: "
+        f"Got {fetched_schemas}/{len(changed_fqns)} schemas, "
+        f"{fetched_sqls}/{len(downstream_fqns)} downstream SQLs"
+    )
+
+    return {
+        "changed_asset_schemas": changed_asset_schemas,
+        "downstream_sqls":       downstream_sqls,
+    }
+
+
+# ── build_pr_ai_context ────────────────────────────────────────────────────────
+
 def build_pr_ai_context(
     asset_fqn_map: Dict[str, Tuple[str, bool, str]],
     merged_subgraph: LineageSubgraph,
-    pr_number: int
+    pr_number: int,
+    downstream_context: Optional[dict] = None
 ) -> str:
     """
     Builds the AI prompt for multi-asset PR analysis.
 
     Args:
-        asset_fqn_map: Dict mapping filename → (fqn, fqn_approximate, stripped_patch)
-        merged_subgraph: Unified lineage subgraph across all changed assets
-        pr_number: GitHub PR number (for context)
+        asset_fqn_map:       Dict mapping filename → (fqn, fqn_approximate, stripped_patch)
+        merged_subgraph:     Unified lineage subgraph across all changed assets
+        pr_number:           GitHub PR number (for context)
+        downstream_context:  Optional dict from build_downstream_context:
+                               - "changed_asset_schemas": {fqn: [{name, dataType}, ...]}
+                               - "downstream_sqls":       {fqn: sql_string | None}
+                             When None, prompt falls back to lineage-only format.
 
-    The prompt:
-      - Lists all changed assets with their stripped patches
-      - Lists the merged lineage graph with source tracking
-      - Defines the exact JSON response schema with per-cause error + fix structure
-      - Is strict: no markdown, no free text, JSON only
+    Three-section prompt when downstream_context is provided:
+      1. CHANGED ASSETS   — diff + current schema (Layer 1 + 2)
+      2. DOWNSTREAM SQL   — SQL fetched from repo (Layer 3)
+      3. LINEAGE GRAPH    — merged node list with source tracking
     """
-    # Build changed assets section
+    changed_asset_schemas = (downstream_context or {}).get("changed_asset_schemas", {})
+    downstream_sqls       = (downstream_context or {}).get("downstream_sqls", {})
+
+    # ── Section 1: Changed assets with diff + current schema ─────────────────
     changed_section_parts = []
     for i, (filename, (fqn, approximate, stripped_patch)) in enumerate(asset_fqn_map.items(), 1):
         approx_note = " (FQN is approximate — derived from path, not patch)" if approximate else ""
+
+        schema_cols = changed_asset_schemas.get(fqn, [])
+        if schema_cols:
+            schema_lines = "\n".join(
+                f"    - {col['name']:<30} {col['dataType']}"
+                for col in schema_cols
+            )
+            schema_block = f"   Current schema (what downstream consumers depend on):\n{schema_lines}"
+        else:
+            schema_block = "   Current schema: not available in OpenMetadata"
+
         changed_section_parts.append(
             f"{i}. FQN: {fqn}{approx_note}\n"
             f"   File: {filename}\n"
-            f"   Diff (changed lines only):\n{stripped_patch or '   (no patch available)'}"
+            f"{schema_block}\n"
+            f"   What changed (diff — additions/removals only):\n"
+            f"{stripped_patch or '   (no patch available)'}"
         )
     changed_section = "\n\n".join(changed_section_parts)
 
-    # Build lineage section with source tracking
+    # ── Section 2: Downstream consumer SQL ───────────────────────────────────
+    if downstream_sqls:
+        downstream_parts = []
+        for idx, (fqn, sql_content) in enumerate(downstream_sqls.items(), 1):
+            if sql_content:
+                sql_lines = sql_content.splitlines()
+                if len(sql_lines) > 150:
+                    sql_display = (
+                        "\n".join(sql_lines[:150])
+                        + f"\n... ({len(sql_lines) - 150} more lines truncated)"
+                    )
+                else:
+                    sql_display = sql_content
+                downstream_parts.append(
+                    f"{idx}. FQN: {fqn}\n"
+                    f"   SQL (fetched from repo):\n"
+                    f"   ```sql\n{sql_display}\n   ```"
+                )
+            else:
+                downstream_parts.append(
+                    f"{idx}. FQN: {fqn}\n"
+                    f"   SQL: NOT FOUND IN REPO — asset may be in a different repository, "
+                    f"a BI tool, or an external system. Reason from lineage context only."
+                )
+        downstream_section = "\n\n".join(downstream_parts)
+    else:
+        downstream_section = "No downstream consumers identified in lineage."
+
+    # ── Section 3: Merged lineage graph with source tracking ─────────────────
     lineage_parts = []
     for node in merged_subgraph.nodes:
-        sources = node.raw_metadata.get("source_assets", [])
+        sources     = node.raw_metadata.get("source_assets", [])
         source_note = f" [reachable from: {', '.join(sources)}]" if sources else ""
         break_note  = " ← BREAK POINT" if node.is_break_point else ""
+        down_note   = " ← DOWNSTREAM CONSUMER" if node.is_downstream else ""
         lineage_parts.append(
             f"- {node.display_name} ({node.asset_type.value}) | FQN: {node.fqn}"
-            f"{source_note}{break_note}"
+            f"{source_note}{break_note}{down_note}"
         )
     lineage_section = "\n".join(lineage_parts) if lineage_parts else "No lineage data available"
 
-    # Severity options for the prompt
     severity_values = " | ".join(s.value for s in SeverityLevel)
 
     return f"""You are a data lineage expert analyzing a GitHub PR (#{pr_number}) that changes data assets.
 Your job: identify exactly what will break downstream and provide precise, actionable fixes.
+
+Use the downstream SQL provided below to CHECK whether each downstream consumer actually
+references the columns that changed. Do not guess — read the SQL and verify.
 
 ═══════════════════════════════════════
 CHANGED ASSETS IN THIS PR ({len(asset_fqn_map)} files)
@@ -703,7 +899,16 @@ CHANGED ASSETS IN THIS PR ({len(asset_fqn_map)} files)
 {changed_section}
 
 ═══════════════════════════════════════
-MERGED DOWNSTREAM LINEAGE GRAPH
+DOWNSTREAM CONSUMERS — SQL FROM REPO
+═══════════════════════════════════════
+These assets CONSUME the changed assets above.
+For each one, the actual SQL has been fetched from the repository.
+Check each SQL carefully: does it reference any column that was renamed, dropped, or type-changed?
+
+{downstream_section}
+
+═══════════════════════════════════════
+LINEAGE GRAPH (for reference)
 ═══════════════════════════════════════
 {lineage_section}
 
@@ -739,7 +944,7 @@ Every field listed below is required. Use null for optional fields you cannot de
         {{
           "source_asset_fqn": "FQN of the PR-changed asset that caused THIS specific break",
           "error_type": "missing_column | type_mismatch | renamed_column | dropped_source | ref_not_found",
-          "error_description": "Exactly what is broken and why — reference the specific column/field/ref",
+          "error_description": "Exactly what is broken — name the specific column from the SQL above",
           "error_location": {{
             "file": "relative/path/to/file/that/needs/fixing.sql",
             "clause": "SELECT | JOIN | WHERE | FROM | source | ref",
@@ -758,10 +963,13 @@ Every field listed below is required. Use null for optional fields you cannot de
 }}
 
 RULES:
+- Only flag a downstream asset as broken if its SQL ACTUALLY references a column that changed.
+  If the SQL does not reference any changed column, do NOT include it in downstream_impacts.
 - downstream_impacts must be deduplicated by FQN — one entry per broken asset
-- Each cause must have a different source_asset_fqn (one cause per changed PR file that contributes to the break)
+- Each cause must reference a specific column name from the SQL and the changed asset schema
 - patch_evidence must be copied verbatim from the diff lines above
-- If no downstream assets are impacted, return downstream_impacts as an empty array and safe_to_merge as true
+- If no downstream assets reference any changed columns, return downstream_impacts as an
+  empty array and safe_to_merge as true
 - severity must be one of exactly: {severity_values}"""
 
 
@@ -769,17 +977,14 @@ def _parse_pr_ai_response(response: dict) -> Optional[PRRootCause]:
     """
     Parses the raw AI response dict into a PRRootCause model.
     Validates required top-level keys first, then constructs nested models
-    explicitly — no auto-coerce. Skips malformed entries with warnings
-    rather than crashing.
+    explicitly. Skips malformed entries with warnings rather than crashing.
     """
-    # Validate required top-level keys
     required_keys = {"pr_summary", "overall_severity", "safe_to_merge", "confidence", "changed_assets", "downstream_impacts"}
     missing = required_keys - set(response.keys())
     if missing:
         print(f"ERROR _parse_pr_ai_response: Missing required keys: {missing}")
         return None
 
-    # Parse changed_assets
     changed_assets: List[ChangedAssetSummary] = []
     for i, ca in enumerate(response.get("changed_assets", [])):
         try:
@@ -794,7 +999,6 @@ def _parse_pr_ai_response(response: dict) -> Optional[PRRootCause]:
         except Exception as e:
             print(f"WARNING _parse_pr_ai_response: Skipping malformed changed_asset[{i}]: {e}")
 
-    # Parse downstream_impacts
     downstream_impacts: List[DownstreamImpact] = []
     for i, di in enumerate(response.get("downstream_impacts", [])):
         try:
@@ -803,7 +1007,6 @@ def _parse_pr_ai_response(response: dict) -> Optional[PRRootCause]:
                 try:
                     loc = cause.get("error_location", {})
                     fix = cause.get("fix", {})
-
                     causes.append(AssetCause(
                         source_asset_fqn=cause["source_asset_fqn"],
                         error_type=cause["error_type"],
@@ -850,9 +1053,6 @@ def call_pr_ai_layer(ai_context: str, max_retries: int = 3) -> Optional[PRRootCa
     """
     Calls the configured LLM and parses the response into a PRRootCause.
     Used by the PR bot investigation flow only.
-
-    Shares the same LLM provider adapters as call_ai_layer but
-    uses _parse_pr_ai_response for the PR-specific response schema.
     """
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
@@ -882,44 +1082,33 @@ def call_pr_ai_layer(ai_context: str, max_retries: int = 3) -> Optional[PRRootCa
     return None
 
 
+# ── run_pr_investigation ───────────────────────────────────────────────────────
+
 def run_pr_investigation(
     investigation_id: str,
     user_id: str,
     connection_id: str,
-    openmetadata_url: str,
-    openmetadata_token: str,
     asset_fqn_map: Dict[str, Tuple[str, bool, str]],
     pr_number: int,
     gh_token: str,
     repo_owner: str,
     repo_name: str,
-    comment_id: str
+    comment_id: str,
+    openmetadata_url: Optional[str] = None,
+    openmetadata_token: Optional[str] = None,
 ) -> bool:
     """
     Full PR investigation pipeline. Called as a background task by the webhook handler.
 
-    Args:
-        investigation_id:    MongoDB investigation document ID
-        user_id:             Trusted user ID from DB (not from request)
-        connection_id:       Connection document ID
-        openmetadata_url:    OpenMetadata API base URL
-        openmetadata_token:  OpenMetadata API token
-        asset_fqn_map:       Dict mapping filename → (fqn, fqn_approximate, stripped_patch)
-        pr_number:           GitHub PR number
-        gh_token:            GitHub installation token
-        repo_owner:          GitHub repo owner
-        repo_name:           GitHub repo name
-        comment_id:          ID of the placeholder comment to update when done
-
     Steps:
-        1. Traverse lineage for each FQN individually
-        2. Merge all subgraphs
-        3. Build PR-specific AI prompt
-        4. Call AI → PRRootCause
-        5. Store result on investigation document
-        6. Update PR comment with full analysis
+        1.  Traverse lineage for each FQN (upstream + downstream in one call)
+        2.  Merge all subgraphs
+        2b. Build downstream context — Layer 2 (schemas) + Layer 3 (SQL) concurrently
+        3.  Build PR-specific AI prompt (enriched with schema + downstream SQL)
+        4.  Call AI → PRRootCause
+        5.  Store result on investigation document
+        6.  Update PR comment with full analysis
     """
-    # Import here to avoid circular imports with github_controller
     from controllers.github_controller import render_pr_comment, update_pr_comment
 
     start_time = datetime.now(timezone.utc)
@@ -928,55 +1117,191 @@ def run_pr_investigation(
         # ── Step 1: Lineage traversal per asset ───────────────────────────────
         print(f"DEBUG run_pr_investigation: Step 1 - Traversing lineage for {len(asset_fqn_map)} assets")
         update_investigation_status(investigation_id, InvestigationStatus.LINEAGE_TRAVERSAL)
-
+ 
         subgraphs: List[Tuple[str, LineageSubgraph]] = []
-
-        for filename, (fqn, approximate, stripped_patch) in asset_fqn_map.items():
-            try:
-                nodes = lineage_controller.traverse_upstream(
-                    openmetadata_url, openmetadata_token, fqn, max_depth=3
-                )
-
-                if not nodes:
-                    print(f"WARNING run_pr_investigation: No lineage found for {fqn} ({filename})")
+        graph = None  # repo graph — used by both Step 1 and Step 2b in Option B
+ 
+        if USE_OPENMETADATA:
+            # ── OPTION A: OpenMetadata (original — preserved exactly) ─────────
+            print(f"DEBUG run_pr_investigation: Step 1 [OPTION A - OpenMetadata]")
+            for filename, (fqn, approximate, stripped_patch) in asset_fqn_map.items():
+                try:
+                    nodes = lineage_controller.traverse_upstream(
+                        openmetadata_url, openmetadata_token, fqn, max_depth=3
+                    )
+ 
+                    if not nodes:
+                        print(f"WARNING run_pr_investigation: No lineage found for {fqn} ({filename})")
+                        continue
+ 
+                    nodes = lineage_controller.detect_break_point(nodes)
+ 
+                    subgraph = LineageSubgraph(
+                        failing_asset_fqn=fqn,
+                        nodes=nodes,
+                        edges=[],
+                        traversal_depth=len(nodes)
+                    )
+                    subgraphs.append((fqn, subgraph))
+ 
+                    downstream_count = sum(1 for n in nodes if n.is_downstream)
+                    print(
+                        f"DEBUG run_pr_investigation: {fqn} — "
+                        f"{len(nodes)} nodes ({downstream_count} downstream consumers)"
+                    )
+ 
+                except Exception as e:
+                    print(f"WARNING run_pr_investigation: Lineage traversal failed for {fqn}: {e}")
                     continue
-
-                nodes = lineage_controller.detect_break_point(nodes)
-
-                subgraph = LineageSubgraph(
-                    failing_asset_fqn=fqn,
-                    nodes=nodes,
-                    edges=[],
-                    traversal_depth=len(nodes)
+ 
+        else:
+            # ── OPTION B: Repo parser (new — zero OpenMetadata calls) ─────────
+            print(f"DEBUG run_pr_investigation: Step 1 [OPTION B - repo graph]")
+            from controllers.repo_parser_controller import (
+                get_repo_graph,
+                build_subgraph_from_graph,
+            )
+ 
+            repo_full_name = f"{repo_owner}/{repo_name}"
+            graph = get_repo_graph(
+                connection_id=connection_id,
+                repo_full_name=repo_full_name
                 )
-                subgraphs.append((fqn, subgraph))
-                print(f"DEBUG run_pr_investigation: Traversed {len(nodes)} nodes for {fqn}")
+            if not graph:
+                print(
+                    f"DEBUG run_pr_investigation: No cached graph for {repo_full_name} "
+                    f"— triggering on-demand scan now"
+                )
+                from controllers.repo_parser_controller import scan_repo
+                graph = scan_repo(
+                    github_token=gh_token,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    connection_id=connection_id,
+                    user_id=user_id,
+                )
 
-            except Exception as e:
-                print(f"WARNING run_pr_investigation: Lineage traversal failed for {fqn}: {e}")
-                continue
+            if not graph or not graph.nodes:
+                print(f"WARNING run_pr_investigation: Graph empty after scan — patch-only analysis")
+            else:
+                for filename, (fqn, approximate, stripped_patch) in asset_fqn_map.items():
+                                try:
+                                    subgraph = build_subgraph_from_graph(graph, fqn)
+            
+                                    if subgraph and subgraph.nodes:
+                                        subgraphs.append((fqn, subgraph))
+                                        downstream_count = sum(1 for n in subgraph.nodes if n.is_downstream)
+                                        print(
+                                            f"DEBUG run_pr_investigation: {fqn} — "
+                                            f"{len(subgraph.nodes)} nodes ({downstream_count} downstream consumers)"
+                                        )
+                                    else:
+                                        print(
+                                            f"WARNING run_pr_investigation: "
+                                            f"{fqn} not found in repo graph — skipping"
+                                        )
+            
+                                except Exception as e:
+                                    print(f"WARNING run_pr_investigation: Graph traversal failed for {fqn}: {e}")
+                                    continue
 
-        if not subgraphs:
-            print(f"ERROR run_pr_investigation: No lineage found for any asset")
-            update_investigation_status(investigation_id, InvestigationStatus.FAILED)
-            return False
+        # ── Step 2: Merge subgraphs ────────────────────────────────────────────
+        if subgraphs:
+            print(f"DEBUG run_pr_investigation: Step 2 - Merging {len(subgraphs)} subgraphs")
+            merged_subgraph = merge_lineage_subgraphs(subgraphs)
+        else:
+            print(f"WARNING run_pr_investigation: No lineage found for any asset — running patch-only analysis")
+            all_fqns = [fqn for _, (fqn, _, _) in asset_fqn_map.items()]
+            merged_subgraph = LineageSubgraph(
+                failing_asset_fqn=", ".join(all_fqns),
+                nodes=[],
+                edges=[],
+                traversal_depth=0
+            )
 
-        # ── Step 2: Merge subgraphs ───────────────────────────────────────────
-        print(f"DEBUG run_pr_investigation: Step 2 - Merging {len(subgraphs)} subgraphs")
         update_investigation_status(investigation_id, InvestigationStatus.CONTEXT_BUILDING)
-
-        merged_subgraph = merge_lineage_subgraphs(subgraphs)
 
         investigations_collection.update_one(
             {"_id": ObjectId(investigation_id)},
             {"$set": {"lineage_subgraph": merged_subgraph.model_dump()}}
         )
 
+        # ── Step 2b: Build downstream context ────────────────────────────────
+        print(f"DEBUG run_pr_investigation: Step 2b - Building downstream context")
+ 
+        if USE_OPENMETADATA:
+            # ── OPTION A: OpenMetadata (original — preserved exactly) ─────────
+            downstream_context = build_downstream_context(
+                openmetadata_url=openmetadata_url,
+                openmetadata_token=openmetadata_token,
+                github_token=gh_token,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                asset_fqn_map=asset_fqn_map,
+                merged_subgraph=merged_subgraph
+            )
+ 
+        else:
+            # ── OPTION B: Build context from repo graph directly ──────────────
+            from controllers.repo_parser_controller import get_downstream
+ 
+            downstream_context = {
+                "changed_asset_schemas": {},
+                "downstream_sqls":       {},
+            }
+ 
+            if graph:
+                for filename, (fqn, approximate, stripped_patch) in asset_fqn_map.items():
+ 
+                    # Layer 2: column schema of changed asset (from graph)
+                    node = graph.nodes.get(fqn)
+                    if not node:
+                        # Try suffix match
+                        for candidate_fqn, candidate_node in graph.nodes.items():
+                            if candidate_fqn.endswith(f".{fqn}") or candidate_fqn == fqn:
+                                node = candidate_node
+                                break
+ 
+                    if node and node.columns:
+                        downstream_context["changed_asset_schemas"][fqn] = [
+                            {"name": col, "dataType": "UNKNOWN"}
+                            for col in node.columns
+                        ]
+                    else:
+                        downstream_context["changed_asset_schemas"][fqn] = []
+ 
+                    # Layer 3: SQL of downstream consumers (from graph — no GitHub search needed)
+                    downstream_nodes = get_downstream(graph, fqn, depth=3)
+                    for downstream_node in downstream_nodes:
+                        if downstream_node.sql:
+                            downstream_context["downstream_sqls"][downstream_node.fqn] = (
+                                downstream_node.sql
+                            )
+                        else:
+                            downstream_context["downstream_sqls"][downstream_node.fqn] = None
+ 
+                fetched_schemas = sum(1 for v in downstream_context["changed_asset_schemas"].values() if v)
+                fetched_sqls    = sum(1 for v in downstream_context["downstream_sqls"].values() if v)
+                print(
+                    f"DEBUG run_pr_investigation: Step 2b [OPTION B] "
+                    f"Got {fetched_schemas}/{len(asset_fqn_map)} schemas, "
+                    f"{fetched_sqls}/{len(downstream_context['downstream_sqls'])} downstream SQLs "
+                    f"from repo graph"
+                )
+            else:
+                print(
+                    f"DEBUG run_pr_investigation: Step 2b [OPTION B] "
+                    f"No graph available — AI will reason from patch diff only"
+                )
+
         # ── Step 3: Build PR AI prompt ────────────────────────────────────────
         print(f"DEBUG run_pr_investigation: Step 3 - Building PR AI context")
-
-        # Estimate token count (rough: 1 token ≈ 4 chars)
-        ai_context = build_pr_ai_context(asset_fqn_map, merged_subgraph, pr_number)
+        ai_context = build_pr_ai_context(
+            asset_fqn_map=asset_fqn_map,
+            merged_subgraph=merged_subgraph,
+            pr_number=pr_number,
+            downstream_context=downstream_context
+        )
         estimated_tokens = len(ai_context) // 4
         print(f"DEBUG run_pr_investigation: Estimated prompt tokens: ~{estimated_tokens}")
 
