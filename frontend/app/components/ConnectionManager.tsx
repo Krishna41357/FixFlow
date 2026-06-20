@@ -55,16 +55,8 @@ export default function ConnectionManager({
       errors.name = 'Workspace name is required';
     }
 
-    if (!formData.openmetadata_host.trim()) {
-      errors.openmetadata_host = 'OpenMetadata URL is required';
-    } else if (!isValidUrl(formData.openmetadata_host)) {
+    if (formData.openmetadata_host.trim() && !isValidUrl(formData.openmetadata_host)) {
       errors.openmetadata_host = 'Invalid URL format';
-    }
-
-    if (!formData.openmetadata_token.trim()) {
-      errors.openmetadata_token = 'OpenMetadata token is required';
-    } else if (formData.openmetadata_token.length < 10) {
-      errors.openmetadata_token = 'Token appears too short';
     }
 
     setValidationErrors(errors);
@@ -150,7 +142,7 @@ export default function ConnectionManager({
               <div className="p-4 bg-gray-700/30 border border-gray-600 rounded-lg text-center">
                 <p className="text-gray-400">No connections configured yet</p>
                 <p className="text-sm text-gray-500 mt-2">
-                  Add your first OpenMetadata connection below
+                  Add your first connection below
                 </p>
               </div>
             ) : (
@@ -178,7 +170,12 @@ export default function ConnectionManager({
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-gray-400 mt-1">{connection.openmetadata_host}</p>
+                        {connection.github_repo && (
+                          <p className="text-sm text-gray-400 mt-1">GitHub: {connection.github_repo}</p>
+                        )}
+                        {connection.openmetadata_host && (
+                          <p className="text-sm text-gray-500 mt-1">{connection.openmetadata_host}</p>
+                        )}
                         {connection.github_repo && (
                           <p className="text-sm text-gray-500 mt-1">
                             GitHub: {connection.github_repo}
@@ -243,10 +240,29 @@ export default function ConnectionManager({
                 )}
               </div>
 
-              {/* OpenMetadata URL */}
+              {/* GitHub Repo */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  OpenMetadata URL
+                  GitHub Repository
+                </label>
+                <input
+                  type="text"
+                  value={formData.github_repo}
+                  onChange={(e) =>
+                    setFormData({ ...formData, github_repo: e.target.value })
+                  }
+                  placeholder="owner/repository"
+                  className="w-full pa-input"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Link a GitHub repository for lineage analysis & PR bot
+                </p>
+              </div>
+
+              {/* OpenMetadata URL (Optional) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  OpenMetadata URL <span className="text-gray-500">(Optional)</span>
                 </label>
                 <input
                   type="url"
@@ -265,10 +281,10 @@ export default function ConnectionManager({
                 )}
               </div>
 
-              {/* OpenMetadata Token */}
+              {/* OpenMetadata Token (Optional) */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  OpenMetadata Access Token
+                  OpenMetadata Access Token <span className="text-gray-500">(Optional)</span>
                 </label>
                 <input
                   type="password"
@@ -285,28 +301,6 @@ export default function ConnectionManager({
                     {validationErrors.openmetadata_token}
                   </p>
                 )}
-                <p className="mt-1 text-xs text-gray-500">
-                  Get your token from OpenMetadata Settings → API Tokens
-                </p>
-              </div>
-
-              {/* GitHub Repo (Optional) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  GitHub Repository (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={formData.github_repo}
-                  onChange={(e) =>
-                    setFormData({ ...formData, github_repo: e.target.value })
-                  }
-                  placeholder="owner/repository"
-                  className="w-full pa-input"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  Optional: Link a GitHub repository for dbt/code change tracking
-                </p>
               </div>
 
               {/* Submit Button */}

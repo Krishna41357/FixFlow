@@ -5,7 +5,6 @@ Manages root cause analysis investigations and results.
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from typing import List
-
 from models.investigations import InvestigationResponse, InvestigationListItem
 from controllers import investigation_controller, connection_controller
 from routes.auth import get_current_user
@@ -48,7 +47,7 @@ async def create_investigation(
         connection_id=connection_id,
         user_id=current_user.user_id
     )
-    # connection can be None for testing without OpenMetadata
+    # connection can be None for testing
     
     # Create investigation
     investigation_id = investigation_controller.create_investigation(
@@ -70,8 +69,6 @@ async def create_investigation(
         investigation_id=investigation_id,
         user_id=current_user.user_id,
         connection_id=connection_id,
-        openmetadata_url=connection.openmetadata_host if connection else "http://localhost:8585",
-        openmetadata_token=connection.openmetadata_token if connection else ""
     )
     
     return {

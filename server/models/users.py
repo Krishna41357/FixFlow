@@ -3,7 +3,7 @@ users.py — User auth and workspace connection schemas for Pipeline Autopsy.
 
 A user has:
   - credentials (email/password → JWT)
-  - one or more Connection records (OpenMetadata + dbt + GitHub per workspace)
+  - one or more Connection records (GitHub repo per workspace)
 """
 
 from typing import Optional, List, Literal
@@ -17,16 +17,16 @@ from .base import MongoBase, PyObjectId, utc_now
 class ConnectionCreate(BaseModel):
     """
     What the user submits on the onboarding page.
-    All three fields together form one 'workspace'.
+    A workspace needs a name and a GitHub repo.
+    OpenMetadata fields are kept for backward compatibility but are optional.
     """
     name: str = Field(..., min_length=1, max_length=80,
                       description="Human label, e.g. 'Prod workspace'")
     openmetadata_host: str = Field(
-        ..., description="Base URL, e.g. https://my-org.openmetadata.org"
+        "", description="(Legacy, optional) Base URL of OpenMetadata instance"
     )
     openmetadata_token: str = Field(
-        ..., min_length=10,
-        description="JWT bot token from OpenMetadata Settings → Bots"
+        "", description="(Legacy, optional) OpenMetadata API token"
     )
     dbt_webhook_secret: Optional[str] = Field(
         None,
@@ -38,13 +38,6 @@ class ConnectionCreate(BaseModel):
         description="Repo slug, e.g. acme-corp/data-warehouse"
     )
 
-    @field_validator("openmetadata_host")
-    @classmethod
-    def host_must_be_url(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("openmetadata_host must start with http:// or https://")
-        return v.rstrip("/")   # strip trailing slash so we can safely append paths
-
 
 class ConnectionResponse(BaseModel):
     """
@@ -53,7 +46,7 @@ class ConnectionResponse(BaseModel):
     """
     id: str
     name: str
-    openmetadata_host: str
+    openmetadata_host: str = ""
     github_repo: Optional[str] = None
     # dbt_webhook_secret deliberately omitted
     # openmetadata_token deliberately omitted
@@ -65,8 +58,8 @@ class ConnectionInDB(MongoBase):
     """Connection document stored in MongoDB."""
     user_id: str
     name: str
-    openmetadata_host: str
-    openmetadata_token: str       # store encrypted in production
+    openmetadata_host: str = ""     # legacy, kept for backward compat
+    openmetadata_token: str = ""    # legacy, kept for backward compat
     dbt_webhook_secret: Optional[str] = None
     github_repo: Optional[str] = None
     github_installation_id: Optional[int] = None  # set after GitHub App install

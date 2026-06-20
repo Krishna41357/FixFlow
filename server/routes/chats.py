@@ -168,8 +168,6 @@ async def send_query(
                         investigation_id=new_investigation_id,
                         user_id=current_user.user_id,
                         connection_id=connection.id,
-                        openmetadata_url=connection.openmetadata_host,
-                        openmetadata_token=connection.openmetadata_token
                     )
 
     # --- Build response via chat controller ---

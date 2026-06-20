@@ -1,4 +1,4 @@
-﻿services:
+services:
   # ===== MONGODB =====
   mongodb:
     image: mongo:7.0
@@ -37,8 +37,7 @@
       MONGO_URI: mongodb://mongodb:27017/rag_database
       SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-this-in-production-12345678}
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
-      OPENMETADATA_URL: http://openmetadata-server:8585
-      OPENMETADATA_API_KEY: ${OPENMETADATA_API_KEY}
+
       GROQ_API_KEY: ${GROQ_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-demo}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-sk-ant-demo}
@@ -77,93 +76,7 @@
     restart: unless-stopped
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
 
-  # ===== OPENMETADATA DEPENDENCIES =====
-  postgresql:
-    image: postgres:13
-    container_name: pipeline_autopsy_postgres
-    environment:
-      POSTGRES_USER: openmetadata_user
-      POSTGRES_PASSWORD: openmetadata_password
-      POSTGRES_DB: openmetadata_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openmetadata_user -d openmetadata_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - pipeline_autopsy_network
 
-  elasticsearch:
-    image: elasticsearch:8.10.2
-    container_name: pipeline_autopsy_es
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-    networks:
-      - pipeline_autopsy_network
-
-  openmetadata-migrate:
-    image: openmetadata/server:1.3.1
-    container_name: pipeline_autopsy_migrate
-    command: "./bootstrap/bootstrap_storage.sh migrate-all"
-    environment:
-      - DB_DRIVER_CLASS=org.postgresql.Driver
-      - DB_SCHEME=postgresql
-      - DB_HOST=postgresql
-      - DB_PORT=5432
-      - DB_USER=openmetadata_user
-      - DB_USER_PASSWORD=openmetadata_password
-      - OM_DATABASE=openmetadata_db
-    depends_on:
-      postgresql:
-        condition: service_healthy
-    networks:
-      - pipeline_autopsy_network
-    restart: "no"
-
-  # ===== OPENMETADATA SERVER =====
-  openmetadata-server:
-    image: openmetadata/server:1.3.1
-    container_name: pipeline_autopsy_openmetadata
-    ports:
-      - "8585:8585"
-    environment:
-      - OPENMETADATA_CLUSTER_NAME=openmetadata
-      - DB_DRIVER_CLASS=org.postgresql.Driver
-      - DB_SCHEME=postgresql
-      - DB_HOST=postgresql
-      - DB_PORT=5432
-      - DB_USER=openmetadata_user
-      - DB_USER_PASSWORD=openmetadata_password
-      - OM_DATABASE=openmetadata_db
-      - ELASTICSEARCH_HOST=elasticsearch
-      - ELASTICSEARCH_PORT=9200
-    depends_on:
-      postgresql:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-      openmetadata-migrate:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD-SHELL", "curl", "-f", "http://localhost:8585/api/v1/system/status || exit 1"]
-      interval: 30s
-      timeout: 15s
-      retries: 20
-      start_period: 180s
-    networks:
-      - pipeline_autopsy_network
-    restart: unless-stopped
 
   # ===== FRONTEND =====
   frontend:
@@ -201,8 +114,3 @@ volumes:
     driver: local
   mongodb_config:
     driver: local
-  postgres_data:
-    driver: local
-  elasticsearch_data:
-    driver: local
-

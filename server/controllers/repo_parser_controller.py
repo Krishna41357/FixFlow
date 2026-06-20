@@ -819,6 +819,12 @@ def _build_nodes_from_migrations(
             columns       = _extract_migration_columns(sql_content) if defined_table else []
             deps          = _parse_table_references(sql_content)
 
+            # Extract types and defaults for new validators
+            from validators.type_change import extract_column_types
+            from validators.default_change import extract_column_defaults
+            col_types    = extract_column_types(sql_content) if defined_table else {}
+            col_defaults = extract_column_defaults(sql_content) if defined_table else {}
+
             nodes[fqn] = RepoLineageNode(
                 fqn=fqn,
                 file_path=file_path,
@@ -826,7 +832,11 @@ def _build_nodes_from_migrations(
                 sql=sql_content,
                 columns=columns,
                 depends_on=deps,
-                raw_metadata={"defined_table": defined_table},
+                raw_metadata={
+                    "defined_table":    defined_table,
+                    "column_types":     col_types,
+                    "column_defaults":  col_defaults,
+                },
             )
 
         except Exception as e:
@@ -1159,6 +1169,8 @@ def _check_migration_ordering(
             continue
 
         for dep_table in node.depends_on:
+            if not dep_table:
+                continue
             dep_table_lower = dep_table.lower()
             if dep_table_lower in table_seq:
                 dep_seq, dep_fqn = table_seq[dep_table_lower]
@@ -1263,6 +1275,10 @@ def validate_contracts(
     graph: RepoLineageGraph,
     changed_fqns: List[str],
     new_column_map: Dict[str, List[str]],
+    new_type_map: Optional[Dict[str, Dict[str, str]]] = None,
+    new_default_map: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
+    new_not_null_map: Optional[Dict[str, set]] = None,
+    patch_map: Optional[Dict[str, str]] = None,
 ) -> List[ContractViolation]:
     """
     Runs all contract validation checks for a set of changed assets and
@@ -1272,17 +1288,25 @@ def validate_contracts(
     in Step 2b (Option B) before the AI prompt is built.
 
     Args:
-        graph           — the current repo lineage graph
-        changed_fqns    — FQNs of assets changed in this PR
-        new_column_map  — {fqn: [new_col1, new_col2, ...]} — the column list
-                          AFTER the PR change, extracted from the PR diff.
-                          Pass empty list for a FQN if columns cannot be determined.
+        graph            — the current repo lineage graph
+        changed_fqns     — FQNs of assets changed in this PR
+        new_column_map   — {fqn: [col1, col2, ...]} — post-PR column list
+        new_type_map     — {fqn: {col: type}} — post-PR column types (optional)
+        new_default_map  — {fqn: {col: default}} — post-PR defaults (optional)
+        new_not_null_map — {fqn: {col, ...}} — post-PR NOT NULL cols (optional)
+        patch_map        — {fqn: stripped_patch} — diff patches (optional)
 
-    Checks performed:
+    Checks performed (original):
       1. Column drops / renames     → downstream nodes referencing missing columns
       2. FK column existence        → FKs pointing to dropped columns
       3. Migration ordering         → migration N depends on table defined in N+k
       4. Source yml drift           → yml declares columns not in new migration schema
+
+    Checks performed (new — from validators package):
+      5. Column type changes        → type mismatch in downstream JOINs/WHEREs
+      6. DEFAULT value changes      → removed defaults breaking INSERTs
+      7. View dependencies          → CREATE VIEW referencing dropped columns
+      8. ALTER TABLE impacts        → DROP/RENAME/ALTER COLUMN from patches
 
     Returns List[ContractViolation] sorted by severity (critical first).
     Empty list means no confirmed violations — genuinely safe to merge.
@@ -1292,9 +1316,16 @@ def validate_contracts(
 
     severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
+    # Defaults for optional maps
+    _type_map     = new_type_map or {}
+    _default_map  = new_default_map or {}
+    _not_null_map = new_not_null_map or {}
+    _patch_map    = patch_map or {}
+
     for fqn in changed_fqns:
         new_cols = new_column_map.get(fqn, [])
 
+        # ── Original checks ───────────────────────────────────────────────────
         try:
             all_violations.extend(_check_column_drops(graph, fqn, new_cols))
         except Exception as e:
@@ -1309,6 +1340,23 @@ def validate_contracts(
             all_violations.extend(_check_source_yml_drift(graph, fqn, new_cols))
         except Exception as e:
             print(f"WARNING validate_contracts: _check_source_yml_drift failed for {fqn}: {e}")
+
+        # ── New validator checks ──────────────────────────────────────────────
+        try:
+            from validators import run_all_validators
+            all_violations.extend(run_all_validators(
+                graph=graph,
+                changed_fqn=fqn,
+                new_columns=new_cols,
+                new_types=_type_map.get(fqn, {}),
+                new_defaults=_default_map.get(fqn, {}),
+                new_not_null_cols=_not_null_map.get(fqn, set()),
+                patch=_patch_map.get(fqn, ""),
+                get_downstream_fn=get_downstream,
+                ContractViolation=ContractViolation,
+            ))
+        except Exception as e:
+            print(f"WARNING validate_contracts: run_all_validators failed for {fqn}: {e}")
 
     # Migration ordering check — runs once across all changed migrations
     try:
@@ -1886,3 +1934,50 @@ def update_graph_nodes(
     except Exception as e:
         print(f"ERROR update_graph_nodes: {e}")
         return False
+    
+def _fetch_file_content_at_ref(
+    github_token: str,
+    repo_owner: str,
+    repo_name: str,
+    file_path: str,
+    ref: str = "",
+) -> Optional[str]:
+    """
+    Same as _fetch_file_content but fetches from a specific branch/SHA ref.
+    Falls back to default branch if ref is empty.
+    """
+    try:
+        url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        params = {}
+        if ref:
+            params["ref"] = ref      # ← this is the key addition
+
+        resp = requests.get(url, headers=headers, params=params, timeout=GITHUB_API_TIMEOUT)
+
+        if resp.status_code == 404:
+            print(f"DEBUG _fetch_file_content_at_ref: 404 for {file_path}@{ref}")
+            return None
+        if resp.status_code == 403:
+            print(f"WARNING _fetch_file_content_at_ref: 403 Forbidden for {file_path}@{ref} -- check token permissions")
+            return None
+        if resp.status_code != 200:
+            print(f"WARNING _fetch_file_content_at_ref: HTTP {resp.status_code} for {file_path}@{ref}")
+            return None
+
+        data        = resp.json()
+        raw_content = data.get("content", "")
+        if not raw_content:
+            return None
+
+        return base64.b64decode(
+            raw_content.replace("\n", "")
+        ).decode("utf-8", errors="replace")
+
+    except Exception as e:
+        print(f"ERROR _fetch_file_content_at_ref: {e} for {file_path}@{ref}")
+        return None

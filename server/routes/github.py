@@ -1,4 +1,4 @@
-﻿"""
+"""
 GitHub Routes — PR Webhooks + OAuth App Registration
 
 Route organisation:
@@ -20,6 +20,7 @@ Changes from previous version:
   - Webhook handler now calls filter_relevant_files + derive_fqns to build
     asset_fqn_map before handing off to background task
   - render_placeholder_comment used for initial comment (replaces inline f-string)
+  - Push events on default branch trigger incremental graph refresh
   - All OAuth routes, helpers, and auth logic are UNCHANGED
 """
 
@@ -62,6 +63,40 @@ GITHUB_REPOS_URL         = "https://api.github.com/user/installations/{installat
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# BACKGROUND TASK — push-triggered graph refresh
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def _run_push_graph_update(
+    connection_id: str,
+    user_id: str,
+    gh_token: str,
+    repo_owner: str,
+    repo_name: str,
+    changed_paths: list,
+):
+    """
+    Incremental graph refresh triggered by a direct push to the default branch.
+    Re-indexes only the changed files, leaving the rest of the graph intact.
+    Falls back to a full scan if no base graph exists yet.
+    """
+    print(
+        f"DEBUG _run_push_graph_update: Refreshing graph for "
+        f"{len(changed_paths)} file(s) in {repo_owner}/{repo_name}"
+    )
+    try:
+        from controllers import repo_parser_controller
+        repo_parser_controller.update_graph_nodes(
+            github_token=gh_token,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            connection_id=connection_id,
+            changed_file_paths=changed_paths,
+        )
+    except Exception as e:
+        print(f"ERROR _run_push_graph_update: Failed to update graph: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PR WEBHOOK
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -94,8 +129,73 @@ async def github_pr_webhook(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid JSON: {str(e)}")
 
+    # ── Early extraction: shared by BOTH push and PR branches ────────────────
+    repo_owner = body.get("repository", {}).get("owner", {}).get("login", "")
+    if not repo_owner:
+        repo_owner = body.get("repository", {}).get("owner", {}).get("name", "")
+    repo_name = body.get("repository", {}).get("name", "")
+
+    connection = connection_controller.get_connection_by_id(connection_id, user_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    trusted_user_id = connection.user_id
+    installation_id = str(getattr(connection, "github_installation_id", "demo") or "demo")
+    gh_token = github_controller.get_installation_token(installation_id)
+    if not gh_token:
+        raise HTTPException(status_code=401, detail="Failed to get GitHub App token")
+
     # ── Gate 5: event type filter BEFORE Pydantic parse ──────────────────────
     action = body.get("action", "")
+
+    # ── 5a: Push to default branch → incremental graph refresh ───────────────
+    if x_github_event == "push":
+        ref = body.get("ref", "")
+        default_branch = body.get("repository", {}).get("default_branch", "main")
+        if ref not in (f"refs/heads/{default_branch}", "refs/heads/main", "refs/heads/master"):
+            return {"message": f"Ignoring push to non-default branch: {ref}"}
+
+        changed_paths: set = set()
+        for commit in body.get("commits", []):
+            changed_paths.update(commit.get("added",    []))
+            changed_paths.update(commit.get("modified", []))
+            changed_paths.update(commit.get("removed",  []))
+
+        _DBT_DIRS_PUSH = ("models/", "seeds/", "snapshots/", "analyses/", "macros/", "migrations/")
+        relevant_paths = [
+            p for p in changed_paths
+            if p.endswith(".sql") or (
+                p.endswith((".yml", ".yaml"))
+                and any(p.startswith(d) for d in _DBT_DIRS_PUSH)
+            )
+        ]
+
+        if not relevant_paths:
+            return {"message": "Push received — no data-relevant files changed, graph unchanged"}
+
+        background_tasks.add_task(
+            _run_push_graph_update,
+            connection_id=connection_id,
+            user_id=user_id,
+            gh_token=gh_token,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            changed_paths=relevant_paths,
+        )
+
+        print(
+            f"DEBUG push_handler: Queued graph update for {len(relevant_paths)} "
+            f"data-relevant file(s) changed by direct push to {ref}"
+        )
+        return {
+            "event":          "push",
+            "ref":            ref,
+            "relevant_files": len(relevant_paths),
+            "total_files":    len(changed_paths),
+            "message":        f"Graph refresh queued for {len(relevant_paths)} data file(s) changed by direct push."
+        }
+
+    # ── 5b: Only pull_request opened/synchronize continues to PR analysis ────
     if x_github_event != "pull_request" or action not in ("opened", "synchronize"):
         return {"message": f"Ignoring event: {x_github_event}/{action}"}
 
@@ -105,25 +205,8 @@ async def github_pr_webhook(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
 
-    # ── Gate 7: connection lookup — derive trusted user_id from DB ───────────
-    connection = connection_controller.get_connection_by_id(
-        connection_id=connection_id,
-        user_id=user_id
-    )
-    if not connection:
-        raise HTTPException(status_code=404, detail="Connection not found")
-
-    trusted_user_id = connection.user_id
-
-    # ── Gate 8: GitHub token ──────────────────────────────────────────────────
-    # With this — always trust the stored installation_id:
-    installation_id = str(connection.github_installation_id or "demo")
-
-    gh_token = github_controller.get_installation_token(installation_id)
-    if not gh_token:
-        raise HTTPException(status_code=401, detail="Failed to get GitHub App token")
-
-    # ── Dict access — pull_request and repository are Dict[str, Any] ─────────
+    # ── Dict access: repo_owner/repo_name overwritten from Pydantic ──────────
+    # (more reliable than raw dict extraction done above for the push branch)
     pr_number  = payload.pull_request["number"]
     pr_url     = payload.pull_request["html_url"]
     repo_owner = payload.repository["owner"]["login"]
@@ -150,9 +233,8 @@ async def github_pr_webhook(
     # ── Step 3: Derive FQNs + strip patches for all relevant files ───────────
     raw_fqn_map = github_controller.derive_fqns(relevant_files)
 
-# Build a filename → asset lookup so composite keys can find their patch
     filename_to_asset = {asset.filename: asset for asset in relevant_files}
-    
+
     asset_fqn_map = {}
     for key, (fqn, approximate) in raw_fqn_map.items():
         base_filename = key.split("::")[0]
@@ -207,8 +289,7 @@ async def github_pr_webhook(
         repo_owner=repo_owner,
         repo_name=repo_name,
         comment_id=comment_id,
-        openmetadata_url=connection.openmetadata_host,
-        openmetadata_token=connection.openmetadata_token
+        pr_head_ref=payload.pull_request["head"]["ref"],
     )
 
     return {
@@ -221,6 +302,7 @@ async def github_pr_webhook(
         "comment_id":       comment_id,
         "message":          f"Analysis started for {len(relevant_files)} data file(s). Comment posted to PR."
     }
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # OAUTH HELPERS (unchanged)
@@ -327,7 +409,6 @@ def _save_registration(connection_id: str, user_id: str, reg: GitHubAppRegistrat
 
 
 def _split_repo(github_repo: Optional[str]) -> tuple[str, str]:
-    """Splits 'owner/repo' into (owner, repo). Raises HTTPException if invalid."""
     if not github_repo or "/" not in github_repo:
         raise HTTPException(400, "Connection has no valid github_repo (expected 'owner/repo')")
     owner, repo = github_repo.split("/", 1)
@@ -532,7 +613,7 @@ async def configure_webhook(
                 "webhook_url":   full_webhook_url,
                 "webhook_secret": body.webhook_secret,
                 "content_type":  "application/json",
-                "events":        ["pull_request"],
+                "events":        ["pull_request", "push"],
                 "active":        True,
             }
         })

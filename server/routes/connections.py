@@ -1,6 +1,7 @@
 """
 Connection Routes
-Manages OpenMetadata and GitHub credentials per workspace/user.
+Manages GitHub and workspace credentials per user.
+OpenMetadata fields are kept for backward compatibility but are optional.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,7 +21,7 @@ async def create_connection(
     current_user: TokenData = Depends(get_current_user)
 ) -> dict:
     """
-    Create a new connection to OpenMetadata + GitHub.
+    Create a new workspace connection (GitHub repo + optional OpenMetadata).
     
     **Request:**
     ```json
@@ -45,7 +46,7 @@ async def create_connection(
     ```
     
     **Errors:**
-    - 400: Invalid OpenMetadata credentials
+    - 400: Invalid credentials
     - 409: Connection already exists
     """
     connection = connection_controller.create_connection(
@@ -56,7 +57,7 @@ async def create_connection(
     if not connection:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to create connection. Check OpenMetadata credentials."
+            detail="Failed to create connection. Check credentials."
         )
     
     return connection.model_dump()
@@ -132,7 +133,7 @@ async def verify_connection(
     current_user: TokenData = Depends(get_current_user)
 ) -> dict:
     """
-    Verify that OpenMetadata connection is still valid.
+    Verify that the connection credentials are still valid.
     
     **Path Parameters:**
     - `connection_id`: Connection ID

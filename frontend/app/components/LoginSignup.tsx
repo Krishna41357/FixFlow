@@ -172,7 +172,7 @@ export default function LoginSignup() {
           <p className={`text-xs ${
             darkMode ? 'text-gray-400' : 'text-gray-500'
           }`}>
-            {isLogin ? 'powered by AI & LLM' : 'powered by OpenMetadata & AI'}
+            {isLogin ? 'powered by AI & LLM' : 'powered by GitHub & AI'}
           </p>
         </div>
 
@@ -307,11 +307,11 @@ export default function LoginSignup() {
               </div>
             )}
 
-            {/* OpenMetadata Integration Info (Sign Up Only) */}
+            {/* Integration Info (Sign Up Only) */}
             {!isLogin && (
               <div className={`p-3 rounded-lg border ${darkMode ? 'bg-blue-900/20 border-blue-700/30' : 'bg-blue-50 border-blue-200'}`}>
                 <p className={`text-xs ${darkMode ? 'text-blue-300' : 'text-blue-800'}`}>
-                  💡 After signup, you'll be able to connect your OpenMetadata catalog and GitHub repositories to start investigating pipeline issues.
+                  💡 After signup, you'll be able to connect your GitHub repositories to start investigating pipeline issues with AI-powered lineage analysis.
                 </p>
               </div>
             )}

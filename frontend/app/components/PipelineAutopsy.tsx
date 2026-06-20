@@ -57,13 +57,9 @@ function OnboardingConnectionForm({
   const validate = () => {
     const e: Record<string, string> = {};
     if (!formData.name.trim()) e.name = 'Workspace name is required';
-    if (!formData.openmetadata_host.trim()) {
-      e.openmetadata_host = 'OpenMetadata URL is required';
-    } else {
+    if (formData.openmetadata_host.trim()) {
       try { new URL(formData.openmetadata_host); } catch { e.openmetadata_host = 'Invalid URL format'; }
     }
-    if (!formData.openmetadata_token.trim()) e.openmetadata_token = 'Access token is required';
-    else if (formData.openmetadata_token.length < 10) e.openmetadata_token = 'Token appears too short';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -121,7 +117,22 @@ function OnboardingConnectionForm({
         {errors.name && <p className="mt-1 text-xs text-red-400">{errors.name}</p>}
       </div>
       <div>
-        <label className="block text-sm font-medium text-gray-300 mb-1">OpenMetadata URL</label>
+        <label className="block text-sm font-medium text-gray-300 mb-1">
+          GitHub Repository
+        </label>
+        <input
+          type="text"
+          value={formData.github_repo}
+          onChange={e => setFormData({ ...formData, github_repo: e.target.value })}
+          placeholder="owner/repository"
+          className="w-full px-4 py-2.5 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
+        />
+        <p className="mt-1 text-xs text-gray-500">Link for lineage analysis & PR impact bot</p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">
+          OpenMetadata URL <span className="text-gray-500 font-normal">(Optional)</span>
+        </label>
         <input
           type="url"
           value={formData.openmetadata_host}
@@ -132,7 +143,9 @@ function OnboardingConnectionForm({
         {errors.openmetadata_host && <p className="mt-1 text-xs text-red-400">{errors.openmetadata_host}</p>}
       </div>
       <div>
-        <label className="block text-sm font-medium text-gray-300 mb-1">OpenMetadata Access Token</label>
+        <label className="block text-sm font-medium text-gray-300 mb-1">
+          OpenMetadata Access Token <span className="text-gray-500 font-normal">(Optional)</span>
+        </label>
         <input
           type="password"
           value={formData.openmetadata_token}
@@ -141,20 +154,6 @@ function OnboardingConnectionForm({
           className={`w-full px-4 py-2.5 rounded-lg bg-slate-700 border text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors ${errors.openmetadata_token ? 'border-red-500' : 'border-slate-600'}`}
         />
         {errors.openmetadata_token && <p className="mt-1 text-xs text-red-400">{errors.openmetadata_token}</p>}
-        <p className="mt-1 text-xs text-gray-500">Get this from OpenMetadata → Settings → Bots</p>
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-300 mb-1">
-          GitHub Repository <span className="text-gray-500 font-normal">(Optional)</span>
-        </label>
-        <input
-          type="text"
-          value={formData.github_repo}
-          onChange={e => setFormData({ ...formData, github_repo: e.target.value })}
-          placeholder="owner/repository"
-          className="w-full px-4 py-2.5 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 transition-colors"
-        />
-        <p className="mt-1 text-xs text-gray-500">Link for PR impact analysis via GitHub bot</p>
       </div>
       <div className="flex gap-3 pt-2">
         <button
@@ -430,7 +429,7 @@ export default function PipelineAutopsy() {
             <h1 className="text-3xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-orange-400">
               Welcome to Pipeline Autopsy
             </h1>
-            <p className="text-gray-400 text-sm">Connect your OpenMetadata workspace to start investigating pipeline failures</p>
+            <p className="text-gray-400 text-sm">Connect your GitHub repository to start investigating pipeline failures</p>
           </div>
           <div className="flex items-center justify-center gap-3 mb-8">
             {[
@@ -448,8 +447,8 @@ export default function PipelineAutopsy() {
             ))}
           </div>
           <div className="bg-slate-800/70 backdrop-blur border border-slate-700 rounded-2xl shadow-2xl p-8">
-            <h2 className="text-xl font-semibold text-white mb-1">Connect to OpenMetadata</h2>
-            <p className="text-gray-400 text-sm mb-6">Enter your workspace credentials to enable AI-powered root cause analysis.</p>
+            <h2 className="text-xl font-semibold text-white mb-1">Connect Your Workspace</h2>
+            <p className="text-gray-400 text-sm mb-6">Enter your GitHub repository to enable AI-powered lineage analysis.</p>
             <OnboardingConnectionForm onSuccess={async () => { await fetchConnections(); }} onLogout={logout} />
           </div>
           <p className="text-center text-xs text-gray-500 mt-6">🔍 AI-powered pipeline debugging for data professionals</p>

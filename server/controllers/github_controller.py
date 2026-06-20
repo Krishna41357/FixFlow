@@ -163,7 +163,7 @@ def register_github_webhook(
         payload = {
             "name": "web",
             "active": True,
-            "events": ["pull_request"],
+            "events": ["pull_request", "push"],
             "config": {
                 "url": webhook_url,
                 "content_type": "json",
@@ -214,7 +214,7 @@ def update_github_webhook(
         }
         payload = {
             "active": True,
-            "events": ["pull_request"],
+            "events": ["pull_request", "push"],
             "config": {
                 "url": webhook_url,
                 "content_type": "json",

@@ -39,7 +39,7 @@ def _doc_to_connectionindb(doc: dict) -> ConnectionInDB:
 
 def create_connection(user_id: str, connection_data: ConnectionCreate) -> Optional[ConnectionInDB]:
     """
-    Saves OpenMetadata host + token + GitHub repo for a user's workspace.
+    Saves GitHub repo (and optional OpenMetadata) credentials for a user's workspace.
     Returns ConnectionInDB if successful, None on error.
     """
     if not user_id:
@@ -110,7 +110,7 @@ def get_user_connections(user_id: str) -> List[ConnectionResponse]:
 
 
 def get_connection_by_id(connection_id: str, user_id: str) -> Optional[ConnectionInDB]:
-    """Fetches one connection by ID — used before every OpenMetadata API call."""
+    """Fetches one connection by ID — used before API calls."""
     if not connection_id or not user_id:
         return None
 
@@ -156,7 +156,13 @@ def get_connection_raw(connection_id: str, user_id: str) -> Optional[dict]:
 
 
 def verify_openmetadata_connection(url: str, token: str) -> bool:
-    """Pings GET /api/v1/system/status to verify the connection works."""
+    """
+    Pings GET /api/v1/system/status to verify the connection works.
+    Returns True immediately if no URL/token provided (OpenMetadata is optional).
+    """
+    if not url or not token:
+        print("DEBUG verify_openmetadata_connection: No OpenMetadata credentials — skipping")
+        return True
     try:
         endpoint = f"{url.rstrip('/')}/api/v1/system/status"
         headers = {"Authorization": f"Bearer {token}"}

@@ -3,9 +3,9 @@ KS-RAG API - Knowledge Source Root Cause Analysis Generator
 
 Main FastAPI application that wires together:
 - Authentication & user management
-- OpenMetadata connections
+- GitHub repository connections
 - Event intake (dbt, GitHub, manual)
-- Investigation pipeline
+- Investigation pipeline (repo-parser based lineage)
 - Chat sessions
 - GitHub PR integration
 """
