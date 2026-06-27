@@ -11,6 +11,9 @@ Public functions:
   classify_changed_files — scoped version for PR-time use (changed files only),
                             reuses an already-detected StackProfile so PR-time
                             classification doesn't redetect the stack on every push
+  extract_repo    — Stage 3: runs identity extraction over every classified,
+                     extractable file from a RepoClassification, returns one
+                     ExtractionResult per file
 
 Network/file-tree fetching pattern is copied from repo_parser_controller.py's
 _get_repo_file_tree — same endpoint, same headers, same graceful-empty-list
@@ -23,10 +26,12 @@ from typing import List, Optional
 
 import requests
 
-from models.classification import RepoClassification, StackProfile
-from classifiers.stack_detector import detect_stack, _fetch_root_file
-from classifiers.rule_engine import classify_files
-from registry.stack_registry import get_rule_set
+from extractor.models.classification import RepoClassification, StackProfile, ClassifiedFile
+from extractor.models.identity import ExtractionResult
+from extractor.classifiers.stack_detector import detect_stack, _fetch_root_file
+from extractor.classifiers.rule_engine import classify_files
+from extractor.registry.stack_registry import get_rule_set
+from extractor.extractors.registry import get_extractor
 
 GITHUB_API_TIMEOUT = 15
 
@@ -163,3 +168,64 @@ def classify_changed_files(
         files=classified,
         total_files_scanned=len(changed_paths),
     )
+
+
+def extract_repo(
+    github_token: str,
+    repo_owner: str,
+    repo_name: str,
+    classification: RepoClassification,
+) -> List[ExtractionResult]:
+    """
+    Stage 3 entrypoint — runs identity extraction over every extractable
+    file from a RepoClassification (the output of classify_repo()).
+
+    Flow, per extractable file:
+      1. Look up which extractor handles file.pending_extractor via the
+         extractors registry
+      2. If no extractor is registered for that hint yet, skip the file
+         (not an error — incremental rollout means most hints won't
+         have an extractor implemented for a while)
+      3. Fetch the file's content
+      4. Call extractor.extract(path, content, classified_file)
+      5. Collect every ExtractionResult, even ones with parse_errors —
+         callers decide what to do with partial/failed extractions
+
+    Returns one ExtractionResult per file that had a registered
+    extractor and fetchable content. Files with no extractor or no
+    fetchable content are silently skipped, not represented in the
+    output list at all — this keeps the return type simple (a flat
+    list of genuine results) rather than mixing in "skipped" markers
+    that every caller would need to filter out anyway.
+    """
+    results: List[ExtractionResult] = []
+    skipped_no_extractor = 0
+    skipped_no_content = 0
+
+    for classified_file in classification.extractable_files:
+        extractor_fn = get_extractor(classified_file.pending_extractor or "")
+        if extractor_fn is None:
+            skipped_no_extractor += 1
+            continue
+
+        content = _fetch_root_file(github_token, repo_owner, repo_name, classified_file.path)
+        if content is None:
+            skipped_no_content += 1
+            continue
+
+        result = extractor_fn(classified_file.path, content, classified_file)
+        results.append(result)
+
+    total_identities = sum(r.identity_count for r in results)
+    total_references = sum(len(r.references) for r in results)
+    failed_count = sum(1 for r in results if r.had_errors)
+
+    print(
+        f"DEBUG extract_repo: {classification.repo_full_name} — "
+        f"{len(results)} files extracted ({total_identities} identities, "
+        f"{total_references} references, {failed_count} with parse errors), "
+        f"{skipped_no_extractor} skipped (no extractor registered), "
+        f"{skipped_no_content} skipped (content unfetchable)"
+    )
+
+    return results

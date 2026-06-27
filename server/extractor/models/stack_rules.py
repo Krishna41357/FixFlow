@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Callable, List
 
-from models.classification import FileTag
+from extractor.models.classification import FileTag
 
 
 @dataclass

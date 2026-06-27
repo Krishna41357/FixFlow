@@ -13,8 +13,8 @@ framework match, then a bare-language fallback, then UNKNOWN.
 
 from typing import Optional, List
 
-from models.classification import StackProfile
-from models.stack_rules import (
+from extractor.models.classification import StackProfile
+from extractor.models.stack_rules import (
     ClassificationRule,
     STACK_RULE_SETS,
     UNIVERSAL_RULES,

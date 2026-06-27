@@ -24,7 +24,7 @@ from typing import Optional, List
 
 import requests
 
-from models.classification import StackProfile
+from extractor.models.classification import StackProfile
 
 GITHUB_API_TIMEOUT = 15
 

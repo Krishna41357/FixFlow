@@ -15,7 +15,7 @@ is still usable; the warnings tell the caller (or a human) where to look.
 from dataclasses import dataclass
 from typing import List
 
-from models.classification import RepoClassification, FileTag
+from extractor.models.classification import RepoClassification, FileTag
 
 
 @dataclass

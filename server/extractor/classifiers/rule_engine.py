@@ -22,8 +22,8 @@ fetching every file's content just to classify by path.
 import re
 from typing import List, Optional, Callable
 
-from models.classification import ClassifiedFile, FileTag
-from models.stack_rules import ClassificationRule
+from extractor.models.classification import ClassifiedFile, FileTag
+from extractor.models.stack_rules import ClassificationRule
 
 
 def _path_matches(rule: ClassificationRule, path: str) -> bool:
