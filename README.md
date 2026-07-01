@@ -1,4 +1,6 @@
-<img src="./logo.png" alt="FixFlow Logo" width="50%">
+<div align="center">
+  <img src="./logo.png" alt="FixFlow Logo" width="35%">
+</div>
 
 # 🔍 FixFlow — AI-Powered Code & Data Dependency Failure Diagnosis
 
