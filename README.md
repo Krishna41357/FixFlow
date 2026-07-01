@@ -1,4 +1,6 @@
-﻿# 🔍 FixFlow — AI-Powered Code & Data Dependency Failure Diagnosis
+![FixFlow Logo](./logo.png)
+
+# 🔍 FixFlow — AI-Powered Code & Data Dependency Failure Diagnosis
 
 **An intelligent PR guard and root-cause engine for full-stack repositories.**
 
